@@ -1260,5 +1260,688 @@ BEGIN
   DELETE FROM search_profile WHERE name = 't17';
 END $$;
 
+-- 018: application history, timeline, board and stats -----------------------------------------------------------------
+DO $$
+DECLARE a bigint; b bigint; c bigint; d bigint; e bigint; bd jsonb; st jsonb; ev jsonb; n int; r record;
+BEGIN
+  TRUNCATE jobs CASCADE;
+  a := pg_temp.dash_job(101, 'shortlisted', 80);
+  b := pg_temp.dash_job(102, 'shortlisted', 70);
+  c := pg_temp.dash_job(103, 'shortlisted', 90);
+  d := pg_temp.dash_job(104, 'shortlisted', 50);
+  e := pg_temp.dash_job(105, 'shortlisted', 75);
+
+  -- every way of changing a status is recorded, whoever makes the change
+  INSERT INTO applications (job_id, status) VALUES (a, 'drafted');                  -- what tailoring does
+  ASSERT (SELECT count(*) FROM application_events WHERE job_id = a) = 1;
+  SELECT * INTO r FROM application_events WHERE job_id = a;
+  ASSERT r.from_status IS NULL AND r.to_status = 'drafted' AND r.source IS NULL, 'the first event has no from, no source';
+
+  PERFORM set_application_status(a, 'applied', 'sent my CV');                      -- the CLI or Telegram
+  SELECT * INTO r FROM application_events WHERE job_id = a ORDER BY id DESC LIMIT 1;
+  ASSERT r.from_status = 'drafted' AND r.to_status = 'applied' AND r.note = 'sent my CV' AND r.source IS NULL;
+
+  PERFORM dashboard_set_status(a, 'interview', 'applied');                         -- the dashboard
+  SELECT * INTO r FROM application_events WHERE job_id = a ORDER BY id DESC LIMIT 1;
+  ASSERT r.from_status = 'applied' AND r.to_status = 'interview' AND r.source = 'dashboard' AND r.note IS NULL,
+         'the old note is not repeated on a later event';
+  ASSERT coalesce(current_setting('jobsearch.source', true), '') = '', 'the marker is cleared after the change';
+
+  PERFORM set_application_status(a, 'offer');                                      -- afterwards a CLI change is not marked
+  SELECT * INTO r FROM application_events WHERE job_id = a ORDER BY id DESC LIMIT 1;
+  ASSERT r.to_status = 'offer' AND r.source IS NULL;
+
+  n := (SELECT count(*) FROM application_events WHERE job_id = a);
+  PERFORM set_application_status(a, 'offer');                                      -- nothing changed: nothing recorded
+  ASSERT (SELECT count(*) FROM application_events WHERE job_id = a) = n, 'a repeat is not an event';
+  PERFORM set_application_status(a, 'offer', 'verbal offer');                      -- a note alone is an event
+  SELECT * INTO r FROM application_events WHERE job_id = a ORDER BY id DESC LIMIT 1;
+  ASSERT r.from_status = 'offer' AND r.to_status = 'offer' AND r.note = 'verbal offer';
+  ASSERT (SELECT count(*) FROM application_events WHERE job_id = a) = n + 1;
+
+  -- the timeline: oldest first, with the failures the API maps
+  ev := dashboard_job_events(a);
+  ASSERT jsonb_array_length(ev) = n + 1;
+  ASSERT ev->0->>'to_status' = 'drafted' AND ev->-1->>'note' = 'verbal offer';
+  ASSERT dashboard_job_events(c) = '[]'::jsonb, 'a job with no application has an empty timeline';
+  BEGIN PERFORM dashboard_job_events(-1); RAISE EXCEPTION 'an unknown job was accepted';
+  EXCEPTION WHEN SQLSTATE 'JD404' THEN NULL; END;
+
+  -- the board: not-yet-applied jobs by score, the rest by when they last moved; counts are the true totals
+  PERFORM set_application_status(b, 'applied');
+  PERFORM set_application_status(d, 'withdrawn');
+  PERFORM set_application_status(e, 'skipped');
+  bd := dashboard_board();
+  ASSERT jsonb_array_length(bd->'columns') = 6;
+  ASSERT (SELECT array_agg(x->>'key') FROM jsonb_array_elements(bd->'columns') x)
+         = ARRAY['not_applied', 'applied', 'in_progress', 'interview', 'offer', 'rejected'];
+  ASSERT (bd->'columns'->0->>'total')::int = 1 AND (bd->'columns'->0->'items'->0->>'id')::bigint = c, 'only c is not applied';
+  ASSERT (bd->'columns'->1->>'total')::int = 1 AND (bd->'columns'->1->'items'->0->>'id')::bigint = b;
+  ASSERT (bd->'columns'->4->>'total')::int = 1 AND (bd->'columns'->4->'items'->0->>'id')::bigint = a;
+  ASSERT (bd->'closed'->>'withdrawn')::int = 1 AND (bd->'closed'->>'skipped')::int = 1, 'withdrawn and skipped are counted, not shown';
+  ASSERT NOT (bd::text LIKE '%' || (SELECT description FROM jobs WHERE id = a) || '%'), 'cards carry no description';
+  ASSERT (bd->'columns'->4->'items'->0->>'status_since') IS NOT NULL;
+
+  FOR n IN 1..45 LOOP PERFORM pg_temp.dash_job(200 + n, 'shortlisted', n); END LOOP;
+  bd := dashboard_board();
+  ASSERT (bd->'columns'->0->>'total')::int = 46, 'the total counts every job';
+  ASSERT jsonb_array_length(bd->'columns'->0->'items') = 40, 'a column shows at most 40 cards';
+  ASSERT (bd->'columns'->0->'items'->0->>'id')::bigint = c AND (bd->'columns'->0->'items'->1->>'score')::int = 45, 'best score first';
+  UPDATE jobs SET status = 'scam_blocked' WHERE id = c;
+  ASSERT (dashboard_board()->'columns'->0->>'total')::int = 45, 'a scam-blocked job is not on the board';
+
+  -- the numbers: replies are measured from real events only
+  TRUNCATE jobs CASCADE;
+  a := pg_temp.dash_job(301, 'shortlisted', 80);
+  b := pg_temp.dash_job(302, 'shortlisted', 80);
+  c := pg_temp.dash_job(303, 'shortlisted', 80);
+  d := pg_temp.dash_job(304, 'shortlisted', 80);
+  PERFORM set_application_status(a, 'applied');
+  PERFORM set_application_status(a, 'interview');
+  PERFORM set_application_status(b, 'applied');
+  PERFORM set_application_status(b, 'rejected');
+  PERFORM set_application_status(c, 'applied');                                    -- never answered
+  PERFORM set_application_status(d, 'applied');
+  PERFORM set_application_status(d, 'offer');
+  UPDATE application_events SET at = now() - interval '20 days' WHERE job_id = a AND to_status = 'applied';
+  UPDATE application_events SET at = now() - interval '14 days' WHERE job_id = a AND to_status = 'interview';   -- 6 days
+  UPDATE application_events SET at = now() - interval '20 days' WHERE job_id = b AND to_status = 'applied';
+  UPDATE application_events SET at = now() - interval '10 days' WHERE job_id = b AND to_status = 'rejected';    -- 10 days
+  UPDATE application_events SET at = now() - interval '20 days' WHERE job_id = d AND to_status = 'applied';
+  UPDATE application_events SET at = now() - interval '19 days', source = 'backfill' WHERE job_id = d AND to_status = 'offer';  -- not measured
+  st := dashboard_stats();
+  ASSERT (st->>'applied')::int = 4 AND (st->>'responded')::int = 3, 'four applied, three answered, got ' || st::text;
+  ASSERT (st->>'reached_interview')::int = 2 AND (st->>'reached_offer')::int = 1, 'interview or offer: a and d';
+  ASSERT (st->>'avg_days_to_reply')::numeric = 8.0 AND (st->>'replies_measured')::int = 2, 'mean of 6 and 10 days, backfill left out, got ' || st::text;
+  ASSERT jsonb_array_length(st->'weekly') = 12;
+  ASSERT (SELECT sum((w->>'applied')::int) FROM jsonb_array_elements(st->'weekly') w) = 4, 'every application is in some week';
+  ASSERT (st->'weekly'->-1->>'week_start')::date = (date_trunc('week', now() AT TIME ZONE (SELECT timezone FROM budget_settings WHERE id = 1)))::date,
+         'the last week is this one, starting on a Monday';
+  ASSERT (st->'weekly'->-1->>'found')::int = 4, 'the jobs were found this week';
+  TRUNCATE jobs CASCADE;
+  st := dashboard_stats();
+  ASSERT (st->>'applied')::int = 0 AND st->'avg_days_to_reply' = 'null'::jsonb, 'no data: no average, no division by zero';
+END $$;
+
+-- 018, second pass: the cases a first reading gets wrong ---------------------------------------------------------------
+DO $$
+DECLARE a bigint; b bigint; c bigint; d bigint; e bigint; f bigint; st jsonb; bd jsonb; r record; wk date; tzname text;
+BEGIN
+  TRUNCATE jobs CASCADE;
+  SELECT timezone INTO tzname FROM budget_settings WHERE id = 1;
+  wk := (date_trunc('week', now() AT TIME ZONE tzname))::date;
+  a := pg_temp.dash_job(501, 'shortlisted', 80);
+  b := pg_temp.dash_job(502, 'shortlisted', 80);
+  c := pg_temp.dash_job(503, 'shortlisted', 80);
+  d := pg_temp.dash_job(504, 'shortlisted', 80);
+  e := pg_temp.dash_job(505, 'scam_blocked', 80);
+  f := pg_temp.dash_job(506, 'shortlisted', 80);
+
+  -- the dashboard's most common move, on a job that has no application yet, is a first event with its note and source
+  PERFORM dashboard_set_status(a, 'applied', 'shortlisted', 'applied on the site');
+  SELECT * INTO r FROM application_events WHERE job_id = a;
+  ASSERT r.from_status IS NULL AND r.to_status = 'applied' AND r.note = 'applied on the site' AND r.source = 'dashboard',
+         'the first event of a dashboard move has its note and source';
+
+  -- tailoring a job again clears review_note on the same status: not an event
+  UPDATE applications SET review_note = 'kept in mind' WHERE job_id = a;
+  ASSERT (SELECT count(*) FROM application_events WHERE job_id = a) = 2, 'a new note is an event';
+  UPDATE applications SET review_note = NULL WHERE job_id = a;
+  ASSERT (SELECT count(*) FROM application_events WHERE job_id = a) = 2, 'a cleared note is not an event';
+
+  -- days in a stage: a note does not reset it, and not applied yet counts from the scoring
+  PERFORM set_application_status(b, 'applied');
+  PERFORM set_application_status(b, 'interview');
+  UPDATE application_events SET at = now() - interval '10 days' WHERE job_id = b;
+  PERFORM set_application_status(b, 'interview', 'asked about salary');            -- a note-only event, now
+  bd := dashboard_board();
+  ASSERT (SELECT (x->>'status_since')::timestamptz < now() - interval '9 days'
+            FROM jsonb_array_elements(bd->'columns'->3->'items') x WHERE (x->>'id')::bigint = b),
+         'a note does not make a card look newly moved';
+  UPDATE jobs SET scored_at = now() - interval '30 days' WHERE id = c;
+  PERFORM set_application_status(c, 'approved');
+  bd := dashboard_board();
+  ASSERT (SELECT (x->>'status_since')::timestamptz < now() - interval '29 days'
+            FROM jsonb_array_elements(bd->'columns'->0->'items') x WHERE (x->>'id')::bigint = c),
+         'a job not applied to yet shows when it was scored, not when it was approved';
+
+  -- the board leaves out scam-blocked jobs and counts withdrawn and skipped separately
+  PERFORM set_application_status(e, 'rejected');
+  PERFORM set_application_status(d, 'withdrawn');
+  PERFORM set_application_status(f, 'skipped');
+  PERFORM set_application_status(pg_temp.dash_job(507, 'shortlisted', 70), 'withdrawn');
+  bd := dashboard_board();
+  ASSERT (bd->'columns'->5->>'total')::int = 0, 'a scam-blocked job is not in Rejected';
+  ASSERT (bd->'closed'->>'withdrawn')::int = 2 AND (bd->'closed'->>'skipped')::int = 1, 'the two counts are not swapped';
+
+  -- the numbers are consistent: everything is about jobs that were ever submitted, once each
+  TRUNCATE jobs CASCADE;
+  a := pg_temp.dash_job(601, 'shortlisted', 80);   -- applied, then interview, then skipped (applied_at is kept)
+  b := pg_temp.dash_job(602, 'shortlisted', 80);   -- straight to interview, never 'applied'
+  c := pg_temp.dash_job(603, 'shortlisted', 80);   -- applied, then withdrawn: not an answer
+  d := pg_temp.dash_job(604, 'shortlisted', 80);   -- applied, moved back, applied again
+  e := pg_temp.dash_job(605, 'shortlisted', 80);   -- never submitted
+  PERFORM set_application_status(a, 'applied'); PERFORM set_application_status(a, 'interview'); PERFORM set_application_status(a, 'skipped');
+  PERFORM set_application_status(b, 'interview');
+  PERFORM set_application_status(c, 'applied'); PERFORM set_application_status(c, 'withdrawn');
+  PERFORM set_application_status(d, 'applied'); PERFORM set_application_status(d, 'approved'); PERFORM set_application_status(d, 'applied');
+  PERFORM set_application_status(e, 'approved');
+  st := dashboard_stats();
+  ASSERT (st->>'applied')::int = 4, 'applied counts every job ever submitted, as the Jobs page does, got ' || st::text;
+  ASSERT (st->>'responded')::int = 2, 'a and b answered; a withdrawal is not an answer, got ' || st::text;
+  ASSERT (st->>'reached_interview')::int = 2, 'a and b reached an interview even though a was skipped later';
+  ASSERT (st->>'responded')::int <= (st->>'applied')::int AND (st->>'reached_interview')::int <= (st->>'applied')::int;
+  ASSERT (st->'weekly'->-1->>'applied')::int = 4, 'a job moved straight to interview is in the week it was submitted, got ' || st::text;
+  ASSERT (st->'weekly'->-1->>'found')::int = 5;
+
+  -- a job applied twice counts in the week of the FIRST time
+  UPDATE application_events SET at = (wk - 14)::timestamp AT TIME ZONE tzname + interval '1 day' WHERE job_id = d AND id = (SELECT min(id) FROM application_events WHERE job_id = d);
+  st := dashboard_stats();
+  ASSERT (st->'weekly'->-3->>'applied')::int = 1 AND (st->'weekly'->-1->>'applied')::int = 3, 'the first submission decides the week, got ' || st::text;
+
+  -- shortlisted and found by week, in the configured time zone, with scam-blocked and filtered-out jobs left out
+  UPDATE search_profile SET score_threshold = 60 WHERE name = 'default';
+  UPDATE jobs SET scored_at = (wk - 7)::timestamp AT TIME ZONE tzname + interval '1 hour', score = 70, first_seen = (wk - 7)::timestamp AT TIME ZONE tzname + interval '1 hour' WHERE id = e;
+  UPDATE jobs SET scored_at = (wk::timestamp AT TIME ZONE tzname) - interval '1 second', score = 70, first_seen = (wk::timestamp AT TIME ZONE tzname) - interval '1 second' WHERE id = c;   -- the last second of last week
+  UPDATE jobs SET scored_at = now(), score = 50 WHERE id = a;                       -- below the threshold
+  UPDATE jobs SET scored_at = now(), score = 90, status = 'scam_blocked' WHERE id = b;
+  st := dashboard_stats();
+  ASSERT (st->'weekly'->-2->>'shortlisted')::int = 2, 'e and c were scored last week (c in its last second), got ' || st::text;
+  ASSERT (st->'weekly'->-1->>'shortlisted')::int = 0, 'below the threshold and scam-blocked do not count, got ' || st::text;
+  ASSERT (st->'weekly'->-2->>'found')::int = 2 AND (st->'weekly'->-1->>'found')::int = 2, 'found by first-seen week, scam-blocked left out, got ' || st::text;
+END $$;
+
+-- 019: notes, contacts and follow-up reminders -------------------------------------------------------------------------
+DO $$
+DECLARE a bigint; b bigint; c bigint; d bigint; e bigint; t jsonb; v1 text; v2 text; n int; r record; bd jsonb; tzname text; today date;
+BEGIN
+  TRUNCATE jobs CASCADE;
+  SELECT timezone INTO tzname FROM budget_settings WHERE id = 1;
+  today := (now() AT TIME ZONE tzname)::date;
+  a := pg_temp.dash_job(701, 'shortlisted', 80);
+  b := pg_temp.dash_job(702, 'shortlisted', 80);
+  c := pg_temp.dash_job(703, 'shortlisted', 80);
+  d := pg_temp.dash_job(704, 'shortlisted', 80);
+  e := pg_temp.dash_job(705, 'shortlisted', 80);
+
+  -- an empty job has nothing; saving creates the row; a change needs the version that was read
+  t := dashboard_job_tracking(a);
+  ASSERT t->'version' = 'null'::jsonb AND t->'notes' = 'null'::jsonb, 'no row yet: all empty, no version';
+  t := dashboard_set_tracking(a, NULL, ('{"notes": "  call Priya on Friday ", "contact_name": "Priya N", "contact_email": "priya@example.com", "referral": "via Sam", "follow_up_on": "' || (today + 3) || '"}')::jsonb);
+  ASSERT t->>'notes' = 'call Priya on Friday' AND t->>'contact_name' = 'Priya N' AND t->>'referral' = 'via Sam', 'values are trimmed and saved';
+  ASSERT (t->>'follow_up_on')::date = today + 3 AND t->>'version' IS NOT NULL;
+  v1 := t->>'version';
+  ASSERT dashboard_job_tracking(a) = t, 'a read returns what the save returned';
+
+  BEGIN PERFORM dashboard_set_tracking(a, NULL, '{"notes": "again"}'); RAISE EXCEPTION 'a save without the version was accepted';
+  EXCEPTION WHEN SQLSTATE 'JD412' THEN NULL; END;
+  BEGIN PERFORM dashboard_set_tracking(a, '2000-01-01T00:00:00.000000Z', '{"notes": "again"}'); RAISE EXCEPTION 'a save with an old version was accepted';
+  EXCEPTION WHEN SQLSTATE 'JD412' THEN NULL; END;
+  ASSERT dashboard_job_tracking(a)->>'notes' = 'call Priya on Friday', 'a refused save changes nothing';
+
+  -- only the fields given change; each save has a new version
+  t := dashboard_set_tracking(a, v1, '{"notes": "moved to Monday"}');
+  v2 := t->>'version';
+  ASSERT v2 <> v1 AND t->>'contact_name' = 'Priya N' AND t->>'notes' = 'moved to Monday', 'a patch keeps the other fields';
+  BEGIN PERFORM dashboard_set_tracking(a, v1, '{"notes": "stale"}'); RAISE EXCEPTION 'the old version still worked';
+  EXCEPTION WHEN SQLSTATE 'JD412' THEN NULL; END;
+
+  -- empty or null clears a field; clearing everything removes the row
+  t := dashboard_set_tracking(a, v2, '{"contact_email": "", "referral": null, "follow_up_on": null}');
+  ASSERT t->'contact_email' = 'null'::jsonb AND t->'referral' = 'null'::jsonb AND t->'follow_up_on' = 'null'::jsonb AND t->>'notes' IS NOT NULL;
+  t := dashboard_set_tracking(a, t->>'version', '{"notes": " ", "contact_name": null}');
+  ASSERT t->'version' = 'null'::jsonb, 'nothing left: no version';
+  ASSERT NOT EXISTS (SELECT 1 FROM job_tracking WHERE job_id = a), 'the row is gone when every field is empty';
+
+  -- refusals
+  FOREACH v1 IN ARRAY ARRAY['{}', '[]', '{"title": "x"}', '{"notes": 5}', '{"notes": true}', '{"contact_email": "not an email"}', '{"contact_email": "a@b"}',
+        '{"follow_up_on": "31/10/2026"}', '{"follow_up_on": "2026-02-31"}', '{"follow_up_on": "1999-01-01"}', '{"follow_up_on": "2999-01-01"}',
+        '{"contact_name": "' || repeat('x', 101) || '"}', '{"referral": "' || repeat('x', 201) || '"}', '{"notes": "' || repeat('x', 2001) || '"}'] LOOP
+    BEGIN PERFORM dashboard_set_tracking(a, NULL, v1::jsonb); RAISE EXCEPTION 'accepted: %', left(v1, 60);
+    EXCEPTION WHEN SQLSTATE 'JD422' THEN NULL; END;
+  END LOOP;
+  PERFORM dashboard_set_tracking(a, NULL, ('{"notes": "' || repeat('x', 2000) || '"}')::jsonb);
+  ASSERT length(dashboard_job_tracking(a)->>'notes') = 2000, 'the longest allowed note is kept';
+  BEGIN PERFORM dashboard_set_tracking(-1, NULL, '{"notes": "x"}'); RAISE EXCEPTION 'unknown job accepted';
+  EXCEPTION WHEN SQLSTATE 'JD404' THEN NULL; END;
+  BEGIN PERFORM dashboard_job_tracking(-1); RAISE EXCEPTION 'unknown job accepted';
+  EXCEPTION WHEN SQLSTATE 'JD404' THEN NULL; END;
+  DELETE FROM job_tracking;
+
+  -- what is due. a: a date today; b: a date tomorrow on an application waiting 30 days (the date wins: not due);
+  -- c: applied 10 days ago, nothing set (waiting); d: applied 3 days ago (not yet); e: applied 10 days ago then rejected
+  PERFORM dashboard_set_tracking(a, NULL, ('{"follow_up_on": "' || today || '"}')::jsonb);
+  PERFORM set_application_status(b, 'applied');
+  PERFORM dashboard_set_tracking(b, NULL, ('{"follow_up_on": "' || (today + 1) || '"}')::jsonb);
+  PERFORM set_application_status(c, 'applied');
+  PERFORM set_application_status(d, 'applied');
+  PERFORM set_application_status(e, 'applied');
+  UPDATE applications SET applied_at = now() - interval '30 days' WHERE job_id = b;
+  UPDATE applications SET applied_at = now() - interval '10 days' WHERE job_id IN (c, e);
+  UPDATE applications SET applied_at = now() - interval '3 days' WHERE job_id = d;
+  PERFORM set_application_status(e, 'rejected');
+  SELECT count(*) INTO n FROM follow_ups_due();
+  ASSERT n = 2, 'a (date) and c (waiting) are due, got ' || n;
+  ASSERT (SELECT reason FROM follow_ups_due() WHERE job_id = a) = 'date' AND (SELECT reason FROM follow_ups_due() WHERE job_id = c) = 'waiting';
+  ASSERT (SELECT days_waiting FROM follow_ups_due() WHERE job_id = c) = 10, 'ten days waiting';
+  ASSERT NOT EXISTS (SELECT 1 FROM follow_ups_due() WHERE job_id IN (b, d, e)), 'a future date, too soon and rejected are not due';
+
+  -- the boundary is "at least N days": exactly 7 is due, 6 is not; a date on a rejected or withdrawn job is not due
+  PERFORM set_application_status(pg_temp.dash_job(711, 'shortlisted', 70), 'applied');
+  PERFORM set_application_status(pg_temp.dash_job(712, 'shortlisted', 70), 'applied');
+  UPDATE applications SET applied_at = (now() AT TIME ZONE tzname)::date::timestamp AT TIME ZONE tzname - interval '7 days' + interval '1 hour'
+   WHERE job_id = (SELECT id FROM jobs WHERE company = 'DashCo 711');
+  UPDATE applications SET applied_at = (now() AT TIME ZONE tzname)::date::timestamp AT TIME ZONE tzname - interval '6 days' + interval '1 hour'
+   WHERE job_id = (SELECT id FROM jobs WHERE company = 'DashCo 712');
+  ASSERT (SELECT count(*) FROM follow_ups_due() WHERE job_id = (SELECT id FROM jobs WHERE company = 'DashCo 711')) = 1, 'exactly seven days waiting is due';
+  ASSERT (SELECT count(*) FROM follow_ups_due() WHERE job_id = (SELECT id FROM jobs WHERE company = 'DashCo 712')) = 0, 'six days is not';
+  PERFORM dashboard_set_tracking(e, NULL, ('{"follow_up_on": "' || (today - 2) || '"}')::jsonb);      -- e was rejected
+  ASSERT NOT EXISTS (SELECT 1 FROM follow_ups_due() WHERE job_id = e), 'a past date on a rejected job is not due';
+  DELETE FROM jobs WHERE company IN ('DashCo 711', 'DashCo 712');
+  DELETE FROM job_tracking WHERE job_id = e;
+
+  -- the number of days is a setting; a past date is due; a reply or a later status stops the waiting rule
+  PERFORM dashboard_set_follow_up_days(2);
+  ASSERT (SELECT count(*) FROM follow_ups_due() WHERE job_id = d) = 1, 'three days waiting is due after two';
+  PERFORM dashboard_set_follow_up_days(7);
+  PERFORM set_application_status(c, 'interview');
+  ASSERT NOT EXISTS (SELECT 1 FROM follow_ups_due() WHERE job_id = c), 'an answered application is not waiting';
+  PERFORM dashboard_set_tracking(c, NULL, ('{"follow_up_on": "' || (today - 4) || '"}')::jsonb);
+  ASSERT (SELECT reason FROM follow_ups_due() WHERE job_id = c) = 'date', 'a past follow-up date is due even after a reply';
+  UPDATE jobs SET status = 'scam_blocked' WHERE id = c;
+  ASSERT NOT EXISTS (SELECT 1 FROM follow_ups_due() WHERE job_id = c), 'scam-blocked jobs are never due';
+  UPDATE jobs SET status = 'shortlisted' WHERE id = c;
+  BEGIN PERFORM dashboard_set_follow_up_days(0); RAISE EXCEPTION 'zero days accepted';  EXCEPTION WHEN SQLSTATE 'JD422' THEN NULL; END;
+  BEGIN PERFORM dashboard_set_follow_up_days(91); RAISE EXCEPTION '91 days accepted';  EXCEPTION WHEN SQLSTATE 'JD422' THEN NULL; END;
+  BEGIN PERFORM dashboard_set_follow_up_days(NULL); RAISE EXCEPTION 'NULL days accepted'; EXCEPTION WHEN SQLSTATE 'JD422' THEN NULL; END;
+  BEGIN UPDATE follow_up_settings SET days = 0; RAISE EXCEPTION 'the table accepted 0'; EXCEPTION WHEN check_violation THEN NULL; END;
+
+  -- the board lists what is due, and flags the cards
+  PERFORM set_application_status(d, 'applied');
+  UPDATE applications SET applied_at = now() - interval '12 days' WHERE job_id = d;
+  bd := dashboard_board();
+  ASSERT (bd->>'follow_up_days')::int = 7 AND (bd->>'follow_ups_total')::int = 3, 'a, c and d are due, got ' || (bd->>'follow_ups_total');
+  ASSERT (bd->'follow_ups'->0->>'reason') = 'date', 'explicit dates come first';
+  ASSERT (SELECT array_agg((x->>'id')::bigint ORDER BY ord) FROM jsonb_array_elements(bd->'follow_ups') WITH ORDINALITY AS q(x, ord)) = ARRAY[c, a, d], 'oldest date first, then the waiting ones, got ' || (bd->'follow_ups')::text;
+  ASSERT (SELECT x->>'follow_up' FROM jsonb_array_elements(bd->'columns'->3->'items') x WHERE (x->>'id')::bigint = c) = 'date', 'the card says why';
+  ASSERT (SELECT x->>'follow_up' FROM jsonb_array_elements(bd->'columns'->1->'items') x WHERE (x->>'id')::bigint = d) = 'waiting';
+  ASSERT (SELECT x->>'follow_up' FROM jsonb_array_elements(bd->'columns'->1->'items') x WHERE (x->>'id')::bigint = b) IS NULL, 'not due: no flag';
+  PERFORM dashboard_set_tracking(c, (dashboard_job_tracking(c))->>'version', '{"contact_name": "Ravi", "contact_email": "ravi@example.com"}');
+  ASSERT (dashboard_board()->'follow_ups'->0->>'contact_name') = 'Ravi', 'the list carries the contact';
+
+  -- the history goes with the job
+  DELETE FROM jobs WHERE id = a;
+  ASSERT NOT EXISTS (SELECT 1 FROM job_tracking WHERE job_id = a);
+END $$;
+
+-- 019, second pass --------------------------------------------------------------------------------------------------
+DO $$
+DECLARE a bigint; b bigint; c bigint; d bigint; e bigint; t jsonb; v text; n int; tzname text; today date; ids bigint[]; session_tz text := current_setting('timezone');
+BEGIN
+  TRUNCATE jobs CASCADE;
+  SELECT timezone INTO tzname FROM budget_settings WHERE id = 1;
+  today := (now() AT TIME ZONE tzname)::date;
+
+  -- every status that must never be due, one by one (a past date is set on each)
+  a := pg_temp.dash_job(901, 'shortlisted', 70); PERFORM set_application_status(a, 'withdrawn');
+  b := pg_temp.dash_job(902, 'shortlisted', 70); PERFORM set_application_status(b, 'skipped');
+  c := pg_temp.dash_job(903, 'expired', 70);
+  d := pg_temp.dash_job(904, 'filtered_out', 70);
+  e := pg_temp.dash_job(905, 'shortlisted', 70);
+  FOR n IN 1..5 LOOP
+    PERFORM dashboard_set_tracking((ARRAY[a, b, c, d, e])[n], NULL, ('{"follow_up_on": "' || (today - 1) || '"}')::jsonb);
+  END LOOP;
+  ASSERT (SELECT array_agg(job_id) FROM follow_ups_due()) = ARRAY[e], 'withdrawn, skipped, expired and filtered-out jobs are not due, got ' || coalesce((SELECT array_agg(job_id)::text FROM follow_ups_due()), 'none');
+
+  -- "today" is the configured zone's, whatever the session's zone is
+  PERFORM set_config('timezone', 'Pacific/Kiritimati', true);                    -- UTC+14: its date is often a day ahead of the configured zone's
+  UPDATE budget_settings SET timezone = 'Pacific/Pago_Pago' WHERE id = 1;       -- UTC-11: a day behind
+  today := (now() AT TIME ZONE 'Pacific/Pago_Pago')::date;
+  PERFORM dashboard_set_tracking(e, (dashboard_job_tracking(e))->>'version', ('{"follow_up_on": "' || today || '"}')::jsonb);
+  ASSERT EXISTS (SELECT 1 FROM follow_ups_due() WHERE job_id = e), 'a date equal to today in the configured zone is due';
+  PERFORM dashboard_set_tracking(e, (dashboard_job_tracking(e))->>'version', ('{"follow_up_on": "' || (today + 1) || '"}')::jsonb);
+  ASSERT NOT EXISTS (SELECT 1 FROM follow_ups_due() WHERE job_id = e), 'tomorrow in the configured zone is not due, even if it is already today elsewhere';
+  ASSERT (dashboard_job_tracking(e)->>'today')::date = today AND (dashboard_board()->>'today')::date = today, 'the server tells the page its today';
+  UPDATE budget_settings SET timezone = tzname WHERE id = 1;
+  PERFORM set_config('timezone', session_tz, true);
+  today := (now() AT TIME ZONE tzname)::date;
+  DELETE FROM job_tracking;
+
+  -- the list: at most 20 on the board with the true total; dates first, the oldest date first, then the longest waiting
+  ids := ARRAY[]::bigint[];
+  FOR n IN 1..25 LOOP
+    ids := ids || pg_temp.dash_job(1000 + n, 'shortlisted', 70);
+    PERFORM set_application_status(ids[n], 'applied');
+    UPDATE applications SET applied_at = now() - make_interval(days => 7 + n) WHERE job_id = ids[n];
+  END LOOP;
+  a := pg_temp.dash_job(990, 'shortlisted', 70);
+  PERFORM dashboard_set_tracking(a, NULL, ('{"follow_up_on": "' || (today - 3) || '"}')::jsonb);
+  b := pg_temp.dash_job(991, 'shortlisted', 70);
+  PERFORM dashboard_set_tracking(b, NULL, ('{"follow_up_on": "' || (today - 9) || '"}')::jsonb);
+  t := dashboard_board();
+  ASSERT (t->>'follow_ups_total')::int = 27 AND jsonb_array_length(t->'follow_ups') = 20, 'twenty shown of 27';
+  ASSERT (t->'follow_ups'->0->>'id')::bigint = b AND (t->'follow_ups'->1->>'id')::bigint = a, 'dates first, oldest date first';
+  ASSERT (t->'follow_ups'->2->>'id')::bigint = ids[25] AND (t->'follow_ups'->3->>'id')::bigint = ids[24], 'then the longest waiting first';
+
+  -- a save that changes nothing is not a change: the version stays, so another tab is not told of one
+  TRUNCATE jobs CASCADE;
+  a := pg_temp.dash_job(1101, 'shortlisted', 70);
+  t := dashboard_set_tracking(a, NULL, '{"notes": "one", "contact_name": "Priya"}');
+  v := t->>'version';
+  t := dashboard_set_tracking(a, v, '{"notes": " one ", "contact_name": "Priya", "referral": "", "contact_email": null}');
+  ASSERT t->>'version' = v, 'the same values saved again keep the version';
+  t := dashboard_set_tracking(a, v, '{"notes": "two"}');
+  ASSERT t->>'version' <> v, 'a real change makes a new one';
+END $$;
+
+DO $$
+DECLARE a bigint; t jsonb;
+BEGIN
+  a := pg_temp.dash_job(1201, 'shortlisted', 70);
+  -- a note that is only line breaks is empty (the form's trim() and the database agree), so the entry is removed
+  t := dashboard_set_tracking(a, NULL, E'{"notes": "\\n\\r\\n \\t"}'::jsonb);
+  ASSERT t->'version' = 'null'::jsonb AND NOT EXISTS (SELECT 1 FROM job_tracking WHERE job_id = a), 'line breaks and tabs count as empty';
+  t := dashboard_set_tracking(a, NULL, E'{"notes": "\\n line one\\nline two \\n"}'::jsonb);
+  ASSERT t->>'notes' = E'line one\nline two', 'outer line breaks are trimmed, inner ones kept';
+  t := dashboard_set_tracking(a, t->>'version', '{"follow_up_on": " "}');
+  ASSERT t->'follow_up_on' = 'null'::jsonb, 'a blank date clears it';
+END $$;
+
+DO $$
+DECLARE j bigint; t jsonb;
+BEGIN
+  j := pg_temp.dash_job(801, 'shortlisted', 80);
+  SET LOCAL ROLE jobsearch_dashboard;
+  t := dashboard_set_tracking(j, NULL, '{"notes": "as the role"}');
+  ASSERT dashboard_job_tracking(j)->>'notes' = 'as the role' AND dashboard_set_follow_up_days(5) = 5;
+  BEGIN PERFORM 1 FROM job_tracking; RAISE EXCEPTION 'the role read job_tracking';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE job_tracking SET notes = 'x'; RAISE EXCEPTION 'the role wrote job_tracking';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM 1 FROM follow_up_settings; RAISE EXCEPTION 'the role read follow_up_settings';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM follow_ups_due(); RAISE EXCEPTION 'the role ran follow_ups_due';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM tracking_today(); RAISE EXCEPTION 'the role ran tracking_today';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM tracking_version(now()); RAISE EXCEPTION 'the role ran tracking_version';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RESET ROLE;
+  UPDATE follow_up_settings SET days = 7;
+END $$;
+
+-- 020, second pass (from the independent review) ----------------------------------------------------------------------------
+DO $$
+DECLARE j bigint; r jsonb; t0 timestamptz := now() - interval '3 days'; t1 timestamptz := now() - interval '2 days'; n int; ev jsonb; m jsonb;
+BEGIN
+  TRUNCATE jobs CASCADE;
+  -- the review time and the update time come back as they were (the earlier values are in the past, so a wrong restore shows)
+  j := pg_temp.dash_job(1701, 'shortlisted', 80);
+  PERFORM set_application_status(j, 'approved');
+  UPDATE applications SET reviewed_at = t0, updated_at = t1 WHERE job_id = j;
+  PERFORM dashboard_set_status(j, 'applied', 'approved');
+  PERFORM dashboard_undo_status(j, 'applied');
+  ASSERT (SELECT reviewed_at FROM applications WHERE job_id = j) = t0, 'reviewed_at restored';
+  ASSERT (SELECT updated_at FROM applications WHERE job_id = j) = t1, 'updated_at restored';
+
+  -- a tailored job (drafted application with files, jobs.status tailored) moved on the dashboard and moved back
+  j := pg_temp.dash_job(1702, 'shortlisted', 80);
+  PERFORM save_application(j, 'tailored', '/o/a', '/o/a/r.pdf', '/o/a/c.pdf', '{}', '[]', '{}', 'm', 0.1, false, NULL, 'review');
+  ASSERT (SELECT status FROM jobs WHERE id = j) = 'tailored';
+  PERFORM dashboard_set_status(j, 'skipped', 'drafted');
+  r := dashboard_undo_status(j, 'skipped');
+  ASSERT r->>'status' = 'drafted', 'the answer is the application status, got ' || r::text;
+  ASSERT (SELECT status FROM jobs WHERE id = j) = 'tailored' AND (SELECT status FROM applications WHERE job_id = j) = 'drafted', 'the job is tailored again';
+
+  -- the first move on jobs that were never shortlisted: the answer and the job status are what they were
+  j := pg_temp.dash_job(1703, 'new', 80);
+  PERFORM dashboard_set_status(j, 'applied', 'new');
+  r := dashboard_undo_status(j, 'applied');
+  ASSERT r->>'status' = 'new', 'answer for a new job';
+  ASSERT (SELECT status FROM jobs WHERE id = j) = 'new', 'jobs.status for a new job';
+  j := pg_temp.dash_job(1704, 'expired', 80);
+  PERFORM dashboard_set_status(j, 'applied', 'expired');
+  r := dashboard_undo_status(j, 'applied');
+  ASSERT r->>'status' = 'expired', 'answer for an expired job';
+  ASSERT (SELECT status FROM jobs WHERE id = j) = 'expired', 'jobs.status for an expired job';
+
+  -- an application that gained files or became a tailored one since the move is not offered and not touched
+  j := pg_temp.dash_job(1705, 'shortlisted', 80);
+  PERFORM dashboard_set_status(j, 'applied', 'shortlisted');
+  UPDATE applications SET cover_letter_path = '/o/c.pdf' WHERE job_id = j;
+  ASSERT NOT (dashboard_job_events(j)->-1->>'undoable')::boolean, 'a cover letter appeared';
+  BEGIN PERFORM dashboard_undo_status(j, 'applied'); RAISE EXCEPTION 'undid over a cover letter'; EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+  UPDATE applications SET cover_letter_path = NULL, variant = 'tailored' WHERE job_id = j;
+  ASSERT NOT (dashboard_job_events(j)->-1->>'undoable')::boolean, 'the variant changed';
+  BEGIN PERFORM dashboard_undo_status(j, 'applied'); RAISE EXCEPTION 'undid over a changed variant'; EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+  ASSERT EXISTS (SELECT 1 FROM applications WHERE job_id = j), 'nothing was removed';
+
+  -- tailoring a job again after a dashboard move (the status stays, the files are replaced, no entry is written)
+  j := pg_temp.dash_job(1706, 'shortlisted', 80);
+  PERFORM save_application(j, 'tailored', '/o/a', '/o/a/r.pdf', '/o/a/c.pdf', '{}', '[]', '{}', 'm', 0.1, false, NULL, 'review');
+  PERFORM dashboard_set_status(j, 'approved', 'drafted');
+  ASSERT (dashboard_job_events(j)->-1->>'undoable')::boolean, 'offered right after the move';
+  PERFORM save_application(j, 'tailored', '/o/b', '/o/b/r.pdf', '/o/b/c.pdf', '{}', '[]', '{}', 'm', 0.1, false, NULL, 'auto');
+  IF (SELECT status FROM applications WHERE job_id = j) = 'approved' THEN                  -- the row was rewritten in place
+    ASSERT NOT (dashboard_job_events(j)->-1->>'undoable')::boolean, 'not offered after the files were replaced';
+    BEGIN PERFORM dashboard_undo_status(j, 'approved'); RAISE EXCEPTION 'undid over replaced files'; EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+    ASSERT (SELECT resume_path FROM applications WHERE job_id = j) = '/o/b/r.pdf', 'the new files are untouched';
+  END IF;
+
+  -- scam-blocked is not offered
+  j := pg_temp.dash_job(1707, 'shortlisted', 80);
+  PERFORM dashboard_set_status(j, 'applied', 'shortlisted');
+  UPDATE jobs SET status = 'scam_blocked' WHERE id = j;
+  ASSERT NOT (dashboard_job_events(j)->-1->>'undoable')::boolean, 'a scam-blocked job is not offered';
+
+  -- a note-only entry names its status too
+  j := pg_temp.dash_job(1708, 'shortlisted', 80);
+  PERFORM dashboard_set_status(j, 'applied', 'shortlisted');
+  PERFORM dashboard_set_status(j, 'applied', 'applied', 'just a note');
+  BEGIN PERFORM dashboard_undo_status(j, 'interview'); RAISE EXCEPTION 'a note was undone with the wrong expected status'; EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+
+  -- dashboard_move_status names the entry it wrote, and none when nothing was recorded
+  j := pg_temp.dash_job(1709, 'shortlisted', 80);
+  m := dashboard_move_status(j, 'applied', 'shortlisted');
+  ASSERT m->>'status' = 'applied' AND (m->>'event_id')::bigint = (SELECT max(id) FROM application_events WHERE job_id = j), 'the first move names its entry';
+  m := dashboard_move_status(j, 'applied', 'applied', '');                                  -- the same status, no note: nothing is recorded
+  ASSERT m->>'status' = 'applied' AND m->'event_id' = 'null'::jsonb, 'a no-op names no entry, got ' || m::text;
+  ASSERT (SELECT count(*) FROM application_events WHERE job_id = j) = 1;
+  m := dashboard_move_status(j, 'interview', 'applied', 'phone screen');
+  ASSERT (m->>'event_id')::bigint = (SELECT max(id) FROM application_events WHERE job_id = j) AND (SELECT count(*) FROM application_events WHERE job_id = j) = 2;
+  -- so the "undo" of a no-op toast cannot reach an older move: there is nothing to name, and an old id is refused
+  BEGIN PERFORM dashboard_undo_status(j, 'interview', (SELECT min(id) FROM application_events WHERE job_id = j)); RAISE EXCEPTION 'undid an older entry by id';
+  EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+  BEGIN PERFORM dashboard_move_status(j, 'applied', 'offer'); RAISE EXCEPTION 'a stale expected status was moved';
+  EXCEPTION WHEN SQLSTATE 'JD409' THEN NULL; END;
+  BEGIN PERFORM dashboard_move_status(-1, 'applied', 'new'); RAISE EXCEPTION 'unknown job moved';
+  EXCEPTION WHEN SQLSTATE 'JD404' THEN NULL; END;
+
+  -- nobody can switch the history off with a plain value: only the undo's own transaction id counts
+  j := pg_temp.dash_job(1710, 'shortlisted', 80);
+  PERFORM set_config('jobsearch.undo', 'on', true);
+  PERFORM set_application_status(j, 'applied');
+  PERFORM set_config('jobsearch.undo', '', true);
+  ASSERT (SELECT count(*) FROM application_events WHERE job_id = j) = 1, 'a forged marker does not silence the history';
+END $$;
+
+-- 020: undoing a change made on the dashboard ---------------------------------------------------------------------------
+DO $$
+DECLARE a bigint; b bigint; c bigint; d bigint; e bigint; f bigint; r jsonb; ev jsonb; n int; st jsonb; applied1 timestamptz; sub text;
+BEGIN
+  TRUNCATE jobs CASCADE;
+  a := pg_temp.dash_job(1301, 'shortlisted', 80);
+  b := pg_temp.dash_job(1302, 'shortlisted', 80);
+  c := pg_temp.dash_job(1303, 'shortlisted', 80);
+  d := pg_temp.dash_job(1304, 'shortlisted', 80);
+  e := pg_temp.dash_job(1305, 'shortlisted', 80);
+  f := pg_temp.dash_job(1306, 'shortlisted', 80);
+
+  -- 1. the first move of a job creates the application; undoing it takes it away again, as if it never happened
+  PERFORM dashboard_set_status(a, 'applied', 'shortlisted', 'sent my CV');
+  ev := dashboard_job_events(a);
+  ASSERT (ev->-1->>'undoable')::boolean, 'the newest dashboard entry can be undone';
+  r := dashboard_undo_status(a, 'applied', (ev->-1->>'id')::bigint);
+  ASSERT r->>'status' = 'shortlisted' AND (r->>'id')::bigint = a, 'back to shortlisted, got ' || r::text;
+  ASSERT NOT EXISTS (SELECT 1 FROM applications WHERE job_id = a), 'the application it created is gone';
+  ASSERT (SELECT status FROM jobs WHERE id = a) = 'shortlisted';
+  ASSERT NOT EXISTS (SELECT 1 FROM application_events WHERE job_id = a), 'the entry is gone, and the undo left none';
+  ASSERT (dashboard_stats()->>'applied')::int = 0, 'the stats never saw it';
+
+  -- 2. the mistake of the day: applied, then dropped on Offer by accident. Undo puts it back to applied, applied date kept
+  PERFORM dashboard_set_status(b, 'applied', 'shortlisted');
+  applied1 := (SELECT applied_at FROM applications WHERE job_id = b);
+  UPDATE applications SET applied_at = applied1 - interval '5 days' WHERE job_id = b;       -- an older date: it must be the one restored
+  applied1 := applied1 - interval '5 days';
+  PERFORM dashboard_set_status(b, 'offer', 'applied', 'oops');
+  ASSERT (dashboard_stats()->>'reached_offer')::int = 1;
+  ev := dashboard_job_events(b);
+  ASSERT (ev->-1->>'undoable')::boolean AND NOT (ev->0->>'undoable')::boolean, 'only the newest entry can be undone';
+  r := dashboard_undo_status(b, 'offer');
+  ASSERT r->>'status' = 'applied';
+  ASSERT (SELECT status FROM applications WHERE job_id = b) = 'applied' AND (SELECT status FROM jobs WHERE id = b) = 'applied';
+  ASSERT (SELECT applied_at FROM applications WHERE job_id = b) = applied1, 'the applied date is what it was';
+  ASSERT (SELECT review_note FROM applications WHERE job_id = b) IS NULL, 'the note of the mistaken move is gone with it';
+  ASSERT (dashboard_stats()->>'reached_offer')::int = 0 AND (dashboard_stats()->>'responded')::int = 0, 'the stats do not count the mistake';
+  ASSERT (SELECT count(*) FROM application_events WHERE job_id = b) = 1, 'one entry left';
+  ASSERT (dashboard_job_events(b)->-1->>'undoable')::boolean, 'and it can be undone in turn';
+  r := dashboard_undo_status(b, 'applied');
+  ASSERT r->>'status' = 'shortlisted' AND NOT EXISTS (SELECT 1 FROM applications WHERE job_id = b), 'a chain of undos goes back step by step';
+
+  -- 3. a note kept from an earlier move comes back when a later move is undone
+  PERFORM dashboard_set_status(c, 'applied', 'shortlisted', 'first note');
+  PERFORM dashboard_set_status(c, 'interview', 'applied', 'second note');
+  PERFORM dashboard_undo_status(c, 'interview');
+  ASSERT (SELECT review_note FROM applications WHERE job_id = c) = 'first note', 'the earlier note is back';
+  ASSERT (SELECT reviewed_at FROM applications WHERE job_id = c) IS NOT NULL;
+  -- a note added without a change of status is undone too
+  PERFORM dashboard_set_status(c, 'applied', 'applied', 'a later thought');
+  ASSERT (SELECT review_note FROM applications WHERE job_id = c) = 'a later thought';
+  PERFORM dashboard_undo_status(c, 'applied');
+  ASSERT (SELECT review_note FROM applications WHERE job_id = c) = 'first note' AND (SELECT status FROM applications WHERE job_id = c) = 'applied';
+
+  -- 4. a move back (applied, then skipped) keeps the applied date, and undoing the move restores the job's status too
+  PERFORM dashboard_set_status(d, 'applied', 'shortlisted');
+  PERFORM dashboard_set_status(d, 'skipped', 'applied');
+  ASSERT (SELECT status FROM jobs WHERE id = d) = 'skipped';
+  PERFORM dashboard_undo_status(d, 'skipped');
+  ASSERT (SELECT status FROM jobs WHERE id = d) = 'applied' AND (SELECT applied_at FROM applications WHERE job_id = d) IS NOT NULL;
+
+  -- 5. what is refused
+  PERFORM set_application_status(e, 'applied');                                            -- the CLI, not the dashboard
+  ASSERT NOT (dashboard_job_events(e)->-1->>'undoable')::boolean, 'a change made elsewhere is not offered';
+  BEGIN PERFORM dashboard_undo_status(e, 'applied'); RAISE EXCEPTION 'a CLI change was undone';
+  EXCEPTION WHEN SQLSTATE 'JD422' THEN NULL; END;
+  PERFORM dashboard_set_status(e, 'interview', 'applied');
+  BEGIN PERFORM dashboard_undo_status(e, 'applied'); RAISE EXCEPTION 'undid with the wrong expected status';
+  EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+  BEGIN PERFORM dashboard_undo_status(e, NULL); RAISE EXCEPTION 'undid without an expected status';
+  EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+  BEGIN PERFORM dashboard_undo_status(e, 'interview', (SELECT min(id) FROM application_events WHERE job_id = e)); RAISE EXCEPTION 'undid an entry that is not the newest';
+  EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+  PERFORM set_application_status(e, 'offer');                                              -- the CLI moves it on after the dashboard
+  ASSERT NOT (dashboard_job_events(e)->0->>'undoable')::boolean AND NOT (dashboard_job_events(e)->-1->>'undoable')::boolean, 'nothing is offered once the CLI moved it on';
+  BEGIN PERFORM dashboard_undo_status(e, 'interview'); RAISE EXCEPTION 'undid an old move after a newer change';
+  EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+  ASSERT (SELECT status FROM applications WHERE job_id = e) = 'offer', 'nothing changed by the refusals';
+  BEGIN PERFORM dashboard_undo_status(f, 'applied'); RAISE EXCEPTION 'undo with no application';
+  EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+  BEGIN PERFORM dashboard_undo_status(-1, 'applied'); RAISE EXCEPTION 'unknown job';
+  EXCEPTION WHEN SQLSTATE 'JD404' THEN NULL; END;
+
+  -- an entry from before this migration has no starting point and cannot be undone
+  PERFORM dashboard_set_status(f, 'applied', 'shortlisted');
+  UPDATE application_events SET prev_job_status = NULL WHERE job_id = f;
+  ASSERT NOT (dashboard_job_events(f)->-1->>'undoable')::boolean;
+  BEGIN PERFORM dashboard_undo_status(f, 'applied'); RAISE EXCEPTION 'an old entry was undone';
+  EXCEPTION WHEN SQLSTATE 'JD422' THEN NULL; END;
+  UPDATE application_events SET prev_job_status = 'shortlisted' WHERE job_id = f;
+  -- an application that has files is never removed by an undo
+  UPDATE applications SET resume_path = '/output/x.pdf' WHERE job_id = f;
+  ASSERT NOT (dashboard_job_events(f)->-1->>'undoable')::boolean, 'not offered for an application with files';
+  BEGIN PERFORM dashboard_undo_status(f, 'applied'); RAISE EXCEPTION 'an application with files was removed';
+  EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;                          -- the application changed since the move
+  ASSERT EXISTS (SELECT 1 FROM applications WHERE job_id = f);
+  -- scam-blocked
+  UPDATE jobs SET status = 'scam_blocked' WHERE id = f;
+  BEGIN PERFORM dashboard_undo_status(f, 'applied'); RAISE EXCEPTION 'a scam-blocked job was changed';
+  EXCEPTION WHEN SQLSTATE 'JD403' THEN NULL; END;
+
+  -- the applied date: a move from "ready to apply" to applied sets it, and undoing that move clears it again
+  a := pg_temp.dash_job(1601, 'shortlisted', 80);
+  PERFORM set_application_status(a, 'approved');
+  ASSERT (SELECT applied_at FROM applications WHERE job_id = a) IS NULL;
+  PERFORM dashboard_set_status(a, 'applied', 'approved');
+  ASSERT (SELECT applied_at FROM applications WHERE job_id = a) IS NOT NULL;
+  PERFORM dashboard_undo_status(a, 'applied');
+  ASSERT (SELECT applied_at FROM applications WHERE job_id = a) IS NULL AND (SELECT status FROM applications WHERE job_id = a) = 'approved'
+         AND (SELECT status FROM jobs WHERE id = a) = 'approved', 'the move set the applied date and the undo cleared it';
+
+  -- only the newest entry is ever offered, even when an older one set the status the job is in now
+  b := pg_temp.dash_job(1602, 'shortlisted', 80);
+  PERFORM dashboard_set_status(b, 'applied', 'shortlisted');
+  PERFORM dashboard_set_status(b, 'interview', 'applied');
+  PERFORM dashboard_set_status(b, 'applied', 'interview');
+  ev := dashboard_job_events(b);
+  ASSERT (ev->0->>'to_status') = 'applied' AND (ev->-1->>'to_status') = 'applied', 'the oldest and the newest both say applied';
+  ASSERT NOT (ev->0->>'undoable')::boolean AND NOT (ev->1->>'undoable')::boolean AND (ev->-1->>'undoable')::boolean, 'only the newest of them is offered';
+
+  -- belt and braces: if the status was changed without leaving an entry, the undo refuses
+  c := pg_temp.dash_job(1603, 'shortlisted', 80);
+  PERFORM dashboard_set_status(c, 'applied', 'shortlisted');
+  PERFORM set_config('jobsearch.undo', 'on', true);
+  UPDATE applications SET status = 'interview' WHERE job_id = c;                              -- no entry is made
+  PERFORM set_config('jobsearch.undo', '', true);
+  ASSERT NOT (dashboard_job_events(c)->-1->>'undoable')::boolean;
+  BEGIN PERFORM dashboard_undo_status(c, 'applied'); RAISE EXCEPTION 'undid a move whose result had been changed';
+  EXCEPTION WHEN SQLSTATE 'JD413' THEN NULL; END;
+
+  -- the marker of an undo does not outlive it: the next change is recorded again
+  a := pg_temp.dash_job(1401, 'shortlisted', 80);
+  PERFORM dashboard_set_status(a, 'applied', 'shortlisted');
+  PERFORM dashboard_undo_status(a, 'applied');
+  ASSERT coalesce(current_setting('jobsearch.undo', true), '') = '';
+  PERFORM dashboard_set_status(a, 'applied', 'shortlisted');
+  ASSERT (SELECT count(*) FROM application_events WHERE job_id = a) = 1, 'a new move after an undo is recorded';
+  -- the starting point is recorded for every kind of change
+  SELECT count(*) INTO n FROM application_events WHERE source = 'dashboard' AND prev_job_status IS NULL;
+  ASSERT n = 0, 'dashboard entries always carry their starting point';
+END $$;
+
+DO $$
+DECLARE j bigint;
+BEGIN
+  j := pg_temp.dash_job(1501, 'shortlisted', 80);
+  SET LOCAL ROLE jobsearch_dashboard;
+  PERFORM dashboard_set_status(j, 'applied', 'shortlisted');
+  ASSERT (dashboard_job_events(j)->-1->>'undoable')::boolean;
+  ASSERT dashboard_undo_status(j, 'applied')->>'status' = 'shortlisted', 'the role can undo through the function';
+  BEGIN PERFORM entry_is_undoable(1); RAISE EXCEPTION 'the role ran entry_is_undoable';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN DELETE FROM application_events; RAISE EXCEPTION 'the role deleted history directly';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RESET ROLE;
+END $$;
+
+-- the role may run the three functions and read nothing of the history
+DO $$
+DECLARE j bigint;
+BEGIN
+  j := pg_temp.dash_job(401, 'shortlisted', 80);
+  SET LOCAL ROLE jobsearch_dashboard;
+  ASSERT dashboard_job_events(j) = '[]'::jsonb AND dashboard_board() ? 'columns' AND dashboard_stats() ? 'weekly';
+  ASSERT dashboard_set_status(j, 'applied', 'shortlisted') = 'applied';
+  ASSERT jsonb_array_length(dashboard_job_events(j)) = 1;
+  BEGIN PERFORM 1 FROM application_events; RAISE EXCEPTION 'the role read application_events';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO application_events (job_id, to_status) VALUES (j, 'offer'); RAISE EXCEPTION 'the role wrote application_events';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RESET ROLE;
+  BEGIN INSERT INTO application_events (job_id, to_status, source) VALUES (j, 'offer', 'telegram'); RAISE EXCEPTION 'an unknown source was accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  DELETE FROM jobs WHERE id = j;
+  ASSERT NOT EXISTS (SELECT 1 FROM application_events WHERE job_id = j), 'the history goes with the job';
+END $$;
+
 ROLLBACK;
 \echo ALL SQL TESTS PASSED

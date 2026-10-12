@@ -6,7 +6,7 @@ import axe from 'axe-core'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { renderApp } from '@/test/render'
-import { HEALTH, jobDetail, jobPage, jobRow, server, unauthorized } from '@/test/server'
+import { HEALTH, jobDetail, jobPage, jobRow, server, TRACKING, unauthorized } from '@/test/server'
 
 /** `popup`: a menu is open. Radix renders it in a portal outside the landmarks, as popups are; the rest still applies. */
 async function violations({ popup = false } = {}): Promise<string[]> {
@@ -116,6 +116,53 @@ describe('accessibility (axe)', () => {
     await user.type(screen.getByLabelText('Companies to skip'), '{Enter}Globex')
     await user.click(screen.getByRole('button', { name: 'Save changes' }))
     await screen.findByRole('alert')
+    expect(await violations()).toEqual([])
+  })
+
+  it('the board', async () => {
+    renderApp('/board')
+    await screen.findByRole('list', { name: 'Board columns' }, { timeout: 5000 })
+    await screen.findByLabelText('Application numbers')
+    expect(await violations()).toEqual([])
+  })
+
+  it('the board with the week table open and a job with its history open', async () => {
+    server.use(http.get('/api/jobs/:id', ({ params }) => HttpResponse.json(jobDetail(Number(params.id), { application_status: 'applied', pipeline_status: 'applied' }))))
+    renderApp('/board?job=3')
+    await screen.findByRole('list', { name: 'Status history' }, { timeout: 5000 })
+    expect(await violations()).toEqual([])
+  })
+
+  it('the board with follow-ups due and the days setting', async () => {
+    renderApp('/board')
+    await screen.findByRole('list', { name: 'Due for a follow-up' }, { timeout: 5000 })
+    await screen.findByLabelText('Remind me when an application has had no reply for')
+    expect(await violations()).toEqual([])
+  })
+
+  it('a job panel with the notes form filled in, an invalid email and a conflict showing', async () => {
+    server.use(
+      http.get('/api/jobs/:id/tracking', () => HttpResponse.json(TRACKING)),
+      http.put('/api/jobs/:id/tracking', () => HttpResponse.json({ detail: 'These notes were changed elsewhere (another tab or device). Reload to see the latest version.' }, { status: 409 })),
+    )
+    renderApp('/board?job=3')
+    const form = await screen.findByRole('form', { name: 'Notes and follow-up' }, { timeout: 5000 })
+    const user = userEvent.setup()
+    await user.type(within(form).getByLabelText('Notes'), ' x')
+    await user.click(within(form).getByRole('button', { name: 'Save' }))
+    await within(form).findByRole('alert')
+    await user.clear(within(form).getByLabelText('Contact email'))
+    await user.type(within(form).getByLabelText('Contact email'), 'nope')
+    await within(form).findByText('That does not look like an email address.')
+    expect(await violations()).toEqual([])
+  })
+
+  it('a job history with the undo confirmation open', async () => {
+    server.use(http.get('/api/jobs/:id', ({ params }) => HttpResponse.json(jobDetail(Number(params.id), { application_status: 'applied', pipeline_status: 'applied' }))))
+    renderApp('/board?job=3')
+    const history = await screen.findByRole('list', { name: 'Status history' }, { timeout: 5000 })
+    await userEvent.click(within(history).getByRole('button', { name: 'Undo this change' }))
+    await within(history).findByRole('group', { name: 'Confirm the undo' })
     expect(await violations()).toEqual([])
   })
 

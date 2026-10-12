@@ -101,8 +101,13 @@ def patch(client, job_id=1, headers=WRITE, **body):
 
 def test_status_change(client, store):
     r = patch(client, note="sent through the site")
-    assert r.status_code == 200 and r.json() == {"id": 1, "status": "applied"}
-    assert store.calls[-1] == ("set_status", 1, "applied", "shortlisted", "sent through the site")
+    assert r.status_code == 200 and r.json() == {"id": 1, "status": "applied", "event_id": 42}
+    assert store.calls[-1] == ("move_status", 1, "applied", "shortlisted", "sent through the site")
+
+
+def test_a_change_that_wrote_nothing_has_no_entry_to_undo(client, store):
+    store.event_id = None
+    assert patch(client).json() == {"id": 1, "status": "applied", "event_id": None}
 
 
 def test_status_change_needs_the_write_header(client, store):

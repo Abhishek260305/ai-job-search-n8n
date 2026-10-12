@@ -2,6 +2,7 @@ import type { RouteObject } from 'react-router-dom'
 import RequireAuth from '@/components/RequireAuth'
 import Login from '@/pages/Login'
 import NotFound from '@/pages/NotFound'
+import BoardRoute from '@/pages/BoardRoute'
 import HealthRoute from '@/pages/HealthRoute'
 import OverviewRoute from '@/pages/OverviewRoute'
 import SearchRoute from '@/pages/SearchRoute'
@@ -15,6 +16,7 @@ export const routes: RouteObject[] = [
     element: <RequireAuth />,
     children: [
       { path: '/', element: <OverviewRoute /> },
+      { path: '/board', element: <BoardRoute /> },
       { path: '/health', element: <HealthRoute /> },
       { path: '/spend', element: <SpendRoute /> },
       { path: '/search', element: <SearchRoute /> },

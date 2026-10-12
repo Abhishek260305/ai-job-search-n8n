@@ -1,6 +1,6 @@
 # Dashboard (web UI)
 
-A browser view of everything the pipeline knows, so you do not have to open Postgres, the CLI or Telegram to see where your search stands. **Status: versions 1 and 2 (Jobs, Health with the pause switch, Spend, Settings and Search) are built, tested and in use. Version 3 and later are not built.** To open it, see [Open the dashboard](#open-the-dashboard); to add it to an install, see [Turn it on](#turn-it-on). Later versions are listed at the end so the work can be picked up in order.
+A browser view of everything the pipeline knows, so you do not have to open Postgres, the CLI or Telegram to see where your search stands. **Status: versions 1 and 2 (Jobs, Health with the pause switch, Spend, Settings and Search) are built, tested and in use. Versions 3a (status history, the Kanban board and the numbers) and 3b (notes, contacts and follow-up reminders) are built and tested; 3a runs on the author's server, 3b is not yet installed. The tailor button (3c) is not built.** To open it, see [Open the dashboard](#open-the-dashboard); to add it to an install, see [Turn it on](#turn-it-on). Later versions are listed at the end so the work can be picked up in order.
 
 The dashboard is optional, like every part beyond scoring. The CLI, Telegram and the database keep working exactly as they do today, with or without it.
 
@@ -60,7 +60,7 @@ flowchart LR
 - **No outbound network calls except one (versions 1 to 2c).** It never calls Claude, Apify, Telegram or n8n. From version 2b the Settings page, and from 2c the Search page, call the scraper service inside the compose network, and only a fixed list of its endpoints (see [Version 2b](#version-2b-settings) and [2c](#version-2c-the-search-profile)). It costs nothing to run.
 - **Opt-in:** the service sits behind a compose profile (`profiles: [dashboard]`). Setting `COMPOSE_PROFILES=dashboard` in `.env` makes a plain `docker compose up -d` include it. People who do not want it never run it. Nothing in the pipeline depends on it.
 - **Rules stay in one place.** The only write in version 1 goes through the existing SQL function `set_application_status()`, the same one `scripts/jobsearch mark` and Telegram `/mark` use. It is wrapped by `dashboard_set_status()`, which adds only the "changed elsewhere" check. The dashboard adds no business rules of its own.
-- **Its own database role.** The API connects as `jobsearch_dashboard`, which can read three views and run six functions and nothing else (no table access). A one-shot `dashboard-db-init` service sets the role's password from `.env` on every `up`.
+- **Its own database role.** The API connects as `jobsearch_dashboard`, which can read three views and run fourteen functions and nothing else (no table access). A one-shot `dashboard-db-init` service sets the role's password from `.env` on every `up`.
 
 ## Open the dashboard
 
@@ -502,6 +502,53 @@ Until now `config/search.json` on your computer was, and the CLI copied it into 
 3. Open Search and compare it with `scripts/jobsearch sources` and `search-profile show`. Nothing changes until you save.
 4. After you save in the dashboard, run `scripts/jobsearch search-profile pull` on your computer before you next edit `config/search.json`.
 
+## Version 3a: history, board and numbers
+
+Three things that all rest on one table, `application_events`: a row each time an application's status changes.
+
+- **History (migration `018_application_events.sql`).** A trigger on `applications` writes the old status, the new status, the note and the time whenever a status changes, or a note is recorded without a change. Because it is a trigger, every path is recorded and none of them was edited: the dashboard, the CLI (`mark`), Telegram and the tailoring pipeline. `source` says `dashboard` when the dashboard made the change and is empty otherwise. Applications that already exist get a starting history made from what is known (when it was applied, where it stands now), marked `backfill` and shown as approximate. The history is shown in each job's details panel under **History**.
+- **The board (`/board`).** Columns: Not applied (shortlisted, tailored, drafted and approved jobs, best score first), Applied, In progress, Interview, Offer, Rejected. Each shows its true total and at most 40 cards; withdrawn and skipped jobs are counted below the board, not shown. A card moves by **dragging it onto a column**, or with the **status menu on the card** (the way on a phone and with a keyboard, and the one that also takes a note). Both send the same request as the Jobs table: the status the card showed goes with it, so a change made elsewhere is a "reload" and not an overwrite. Nothing moves on screen until the server has confirmed. Dropping on Not applied does nothing: a submitted job is never un-submitted by a drop (the menu asks first, as in the table). The board only records what you tell it: nothing here sends anything. A mistaken drop can be **undone**: the "Marked Offer" message that appears after every move (on the Board and in the Jobs table) has an **Undo** button for 30 seconds, and a slip you notice later has an **Undo this change** button on its entry in the job's History (it asks first). An undo puts the job back exactly as it was before the move (its status, its applied date, its note) and removes the entry for good, so the numbers never see the mistake. See [Undo](#undo) for what can and cannot be undone.
+- **The numbers.** They count jobs you ever submitted (the same "Applied" as on the Jobs page, which keeps counting a job you later skipped), each once. On the board's top row: how many you applied to, **heard back** (how many of those moved to in progress, interview, offer or rejected, as a percent), **days to a first reply** (the average, measured only from real history, so it shows a dash until a reply has happened since history tracking began), how many reached an interview and an offer. Under the board, **Week by week** lists the last 12 weeks (weeks start on Monday in the configured time zone): jobs found, shortlisted and applied to.
+- **API:** `GET /api/board`, `GET /api/stats`, `GET /api/jobs/{id}/events`. All three only read; a move is the existing `PATCH /api/jobs/{id}/status`.
+- **Database:** `dashboard_board()`, `dashboard_stats()` and `dashboard_job_events(job)` (and, from migration 020, `dashboard_undo_status()`) (SECURITY DEFINER, granted to `jobsearch_dashboard` only), and `dashboard_set_status()` now marks its change as the dashboard's (same arguments and checks). The role still has no table privileges; it cannot read or write `application_events`.
+
+## Version 3b: notes, contacts and follow-up reminders
+
+- **Notes and follow-up (in a job's panel).** For any job, shortlisted or not: free **notes** (2,000 characters), a **contact** name and email, who **referred** you, and a **follow-up date** (with "In 3 days" and "In a week" buttons). It is a draft until you press **Save**, and it only sends the fields you changed. What you typed survives closing the panel or moving to another job (until you save or discard it, or reload the page). If the notes were changed somewhere else meanwhile (your phone, another tab), the save is refused with a message, your text stays on screen, and you choose **Load the latest** (drop yours) or **Save my changes on top** (the fields you changed win, the others keep the latest value). Emptying every field removes the entry. An ordinary email address becomes a "Write to" link.
+- **The Follow up list (top of the Board).** What is due today, dates first, then the longest waiting; each shows why ("Your follow-up date was …", "Applied 11 days ago, no reply"), the contact and who referred you. **Followed up** sets the next reminder the set number of days ahead; **Snooze 3 days** sets it three days ahead. Cards on the board carry a **Follow up** badge while due.
+- **The rule.** Due today means: a follow-up date that is today or in the past; or, with no date set, an application still at **Applied** for at least N days (default 7, change it in the list's header or with `scripts/jobsearch follow-up --days N`). A date in the future always means "not yet". Rejected, withdrawn, skipped and scam-blocked jobs are never due. "Today" is in your configured time zone, and the page counts "in 3 days" and "Snooze" from the server's today, so a browser in another zone cannot be a day off.
+- **Telegram (optional, off by default).** `scripts/jobsearch follow-up --digest on` adds a "Follow up" section to the daily message, and the message is sent on its own on a day with no new matches. Nothing changes for anyone who does not switch it on.
+- **API:** `GET` and `PUT /api/jobs/{id}/tracking` (a save carries the `version` it read), `PUT /api/follow-ups/days`; `GET /api/board` now also returns what is due.
+- **Database (migration `019_tracking_followups.sql`):** the tables `job_tracking` and `follow_up_settings`, `follow_ups_due()` (the rule above), and the functions `dashboard_job_tracking()`, `dashboard_set_tracking()`, `dashboard_set_follow_up_days()`; `dashboard_board()` lists what is due. The role still has no table privileges.
+- **Scraper:** only the digest changed (it asks the database for the reminders when they are switched on, and skips them on a database without migration 019).
+
+### Adding version 3b to an existing install
+
+1. Back up (`scripts/backup.sh`), then `scripts/jobsearch migrate` (applies 019; it adds two tables and functions).
+2. Sync the code, then rebuild the scraper and the dashboard: `docker compose --profile dashboard build scraper dashboard`, `docker compose up -d scraper` (a few seconds without the scraper) and `docker compose --profile dashboard up -d --no-deps dashboard`.
+3. Open a job on the Board, add a note and a follow-up date, and check the Follow up list; `scripts/jobsearch follow-up` shows the same.
+
+### Undo
+
+- **What it takes back.** Only the **newest** history entry of a job, and only if it was made **on the dashboard** (a change made with the CLI or Telegram is not offered), the job is still in the status that entry set, the application has not been changed since (for example tailored again, which replaces its files), and the job is not scam-blocked. The **Undo** on a "Marked" message is tied to the very entry that move wrote, so it can never reach an older move; a change that wrote nothing (the same status again) has nothing to undo and shows no button. After an undo the entry before it is the newest, so you can step back more than once.
+- **What it restores.** The job's status, the application's status, its applied date, its review time, its note and its update time, as they were before the change. A move that created the application (the first move of a job nobody had acted on) takes the application away again. It is never removed if it has files.
+- **What it does not do.** It does not undo a change made before this feature existed (those entries have no starting point and show no button), a change made through the CLI or Telegram, or an older entry while a newer one exists. Nothing is ever edited in the middle of the history.
+- **Races.** The page names the status it expects (and, from the timeline, the entry). If anything moved in the meantime the server refuses with "The history of this job changed since you looked", and the page reloads.
+- **API and database.** `PATCH /api/jobs/{id}/status` now answers with `event_id` (the entry it wrote, or null); `POST /api/jobs/{id}/undo` `{expected_status, event_id?}`; the timeline's entries carry `undoable`. Migration `020_undo_status.sql` adds the starting-point columns to `application_events` and the functions `dashboard_move_status()` and `dashboard_undo_status()` (the undo is not itself recorded in the history, and only the undo's own transaction can switch the recording off).
+- **Known limit.** A job whose status was moved from `new` by the dashboard before the scorer had scored it goes back to `new` on undo, and is scored then: nothing is lost, but it is the scorer's turn again.
+
+### Adding undo to an existing install
+
+1. Back up (`scripts/backup.sh`), then `scripts/jobsearch migrate` (applies 020; it only adds columns and functions). **Migrate before rebuilding the dashboard**: the new dashboard asks for the new functions. (A dashboard image that runs ahead of its database answers "the database needs its latest migration" instead of crashing.)
+2. Sync the code and rebuild only the dashboard: `docker compose --profile dashboard build dashboard && docker compose --profile dashboard up -d --no-deps dashboard`.
+3. Move a job on the Board and press **Undo** on the message; the Offers and Heard back numbers should return to what they were.
+
+### Adding version 3a to an existing install
+
+1. Back up (`scripts/backup.sh`), then `scripts/jobsearch migrate` (applies 018; it adds a table, a trigger and functions, and fills in the starting history).
+2. Sync the code and rebuild only the dashboard: `docker compose --profile dashboard build dashboard && docker compose --profile dashboard up -d --no-deps dashboard`. The scraper, n8n and Postgres are not touched.
+3. Open Board and compare it with `scripts/jobsearch jobs` and the Jobs page.
+
 ## Known limits of version 1
 
 Small things found in review and left for a later pass; none loses data or bypasses a rule.
@@ -538,12 +585,12 @@ The health and spend panels and the pause switch are built (version 2a, above), 
 
 ### Version 3: tracking your applications
 
-- **Status history:** a new `application_events` table filled by a trigger whenever an application's status changes (old status, new status, note, when, who: `cli`, `telegram`, `dashboard` or `gmail`). This unlocks "ever reached interview" counts, a timeline per job, response rate and average days to a reply.
-- **Kanban board:** columns Not applied, Applied, In progress, Interview, Offer, Rejected; dragging a card calls `set_application_status()`.
-- **Notes and contacts:** recruiter name and email, referral, free notes (the `applications.notes` column exists today), and a follow-up date.
-- **Follow-up reminders:** applications with no reply after N days are highlighted, with an optional line in the Telegram digest.
+- **Status history** (built, version 3a): a new `application_events` table filled by a trigger whenever an application's status changes, with a timeline per job, response rate and average days to a reply. Later, `source` can also say `telegram`, `cli` or `gmail`.
+- **Kanban board** (built, version 3a).
+- **Notes and contacts** (built, version 3b): recruiter name and email, referral, free notes and a follow-up date, on any job.
+- **Follow-up reminders** (built, version 3b): applications with no reply after N days, or a date you set, are listed and highlighted, with an optional section in the Telegram digest.
 - **On-demand tailoring:** a "tailor this job" button for one job even while automatic tailoring is off. It goes through the scraper's existing tailoring path, the budget guard and the daily limit, never around them.
-- **Weekly stats:** jobs found, shortlisted and applied per week, by source.
+- **Weekly stats** (built, version 3a, without the split by source): jobs found, shortlisted and applied per week.
 
 ### Version 4 and beyond
 

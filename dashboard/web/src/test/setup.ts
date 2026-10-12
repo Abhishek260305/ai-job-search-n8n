@@ -11,6 +11,11 @@ globalThis.ResizeObserver ??= class {
   disconnect() {}
 }
 
+// jsdom has no pointer capture; sonner calls it when a toast button is pressed (the Undo on a "Marked" message).
+Element.prototype.setPointerCapture ??= () => {}
+Element.prototype.releasePointerCapture ??= () => {}
+Element.prototype.hasPointerCapture ??= () => false
+
 // The suite runs on many workers at once; a lazy page or a first render can take longer than the default one second
 // under that load, and a slow machine is not a failing test. Passing tests do not wait for this.
 configure({ asyncUtilTimeout: 4000 })

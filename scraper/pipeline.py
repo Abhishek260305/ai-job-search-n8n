@@ -164,13 +164,49 @@ def _marks(row: dict, today: date) -> list[str]:
     return marks
 
 
-def format_digest(rows: list[dict], today: Optional[date] = None, spend: Optional[dict] = None) -> dict:
+FOLLOWUPS_SHOWN = 8
+_CUT = {"title": 60, "company": 40, "contact_name": 40}     # a long title must not push the message over Telegram's limit
+
+
+def _cut(text: object, limit: int) -> str:
+    text = " ".join(str(text).split())
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def format_followups(rows: list[dict], today: Optional[date] = None) -> str:
+    """The follow-up reminders for the daily message (dashboard version 3b), or "" when nothing is due. Only sent when the
+    user switched it on (`scripts/jobsearch follow-up --digest on`); the rows come from follow_ups_due(). Each row may carry
+    `total` (how many are due in all) and `today` (the date in the configured time zone, which the wording is relative to)."""
+    if not rows:
+        return ""
+    today = today or rows[0].get("today") or date.today()
+    total = max(len(rows), rows[0].get("total") or 0)
+    lines = [f"⏰ Follow up ({total}):"]
+    for r in rows[:FOLLOWUPS_SHOWN]:
+        if r.get("reason") == "date":
+            due = r.get("follow_up_on")
+            when = "follow-up date is today" if due == today else f"follow-up date was {due}"
+        else:
+            days = r.get("days_waiting")
+            when = f"applied {days} day{'s' if days != 1 else ''} ago, no reply"
+        who = f" ({_cut(r['contact_name'], _CUT['contact_name'])})" if r.get("contact_name") else ""
+        lines.append(f"- {_cut(r['title'], _CUT['title'])} @ {_cut(r['company'], _CUT['company'])}: {when}{who}")
+    if total > FOLLOWUPS_SHOWN:
+        lines.append(f"... and {total - FOLLOWUPS_SHOWN} more (the dashboard's Board lists them)")
+    return "\n".join(lines)
+
+
+def format_digest(rows: list[dict], today: Optional[date] = None, spend: Optional[dict] = None,
+                  followups: Optional[list[dict]] = None) -> dict:
     """The shortlist message. `spend` (a budget status) adds a footer, and an alert line that is sent
-    on its own even when there are no new matches (so a paused pipeline is never silent)."""
+    on its own even when there are no new matches (so a paused pipeline is never silent). `followups` (only when the
+    user asked for them) adds a reminder section, which is also sent on its own when there are no new matches."""
     today = today or date.today()
     alert = budget.alert_text(spend) if spend else ""
+    follow = format_followups(followups or [], today)
     if not rows:
-        return {"count": 0, "ids": [], "text": alert, "html": html_lib.escape(alert, quote=False), "alert": alert}
+        text = "\n\n".join(part for part in (follow, alert) if part)
+        return {"count": 0, "ids": [], "text": text, "html": html_lib.escape(text, quote=False), "alert": alert}
     lines = [f"\U0001F3AF {len(rows)} new match{'es' if len(rows) != 1 else ''} above your threshold", ""]
     shown: list[int] = []
     for i, r in enumerate(rows, 1):
@@ -185,12 +221,14 @@ def format_digest(rows: list[dict], today: Optional[date] = None, spend: Optiona
             block.append(f"   {r['canonical_url']}")
         block.append("")
         candidate = "\n".join(lines + block)
-        if len(candidate) > MAX_DIGEST_CHARS:
+        if len(candidate) > MAX_DIGEST_CHARS - (len(follow) + 2 if follow else 0):
             lines.append(f"... and {len(rows) - len(shown)} more (run /status)")
             break
         lines += block
         shown.append(r["id"])
     text = "\n".join(lines).strip()
+    if follow:
+        text += "\n\n" + follow
     if spend:
         text += "\n\n" + (alert + "\n" if alert else "") + budget.footer_text(spend)
     # Telegram's HTML mode needs &, < and > escaped; titles and URLs come from third-party postings.
@@ -198,7 +236,7 @@ def format_digest(rows: list[dict], today: Optional[date] = None, spend: Optiona
 
 
 def digest(store, limit: int = 10, today: Optional[date] = None) -> dict:
-    return format_digest(store.digest_rows(limit), today, store.budget_status())
+    return format_digest(store.digest_rows(limit), today, store.budget_status(), store.follow_ups_for_digest())
 
 
 def sweep(store) -> dict:

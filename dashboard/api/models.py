@@ -164,11 +164,174 @@ class StatusChange(BaseModel):
 class StatusResult(BaseModel):
     id: int
     status: EditableStatus
+    event_id: int | None = None          # the history entry this change wrote (what "Undo" is tied to); none if nothing was recorded
 
 
 class ErrorBody(BaseModel):
     detail: str
     current_status: PipelineStatus | None = None
+
+
+# ---------------------------------------------------------------- version 3a: history, board, stats
+# One dict each from dashboard_job_events(), dashboard_board() and dashboard_stats() (migration 018); the shapes are
+# checked against the real functions in tests/test_store_pg.py.
+
+class JobEvent(BaseModel):
+    id: int
+    from_status: str | None              # none for the first event of an application
+    to_status: str                       # equal to from_status for a note recorded without a change
+    note: str | None
+    source: Literal["dashboard", "backfill"] | None   # none: the CLI, Telegram or the pipeline made the change
+    at: datetime
+    undoable: bool = False               # only the newest entry, made on the dashboard, and only while the job is still as it left it
+
+
+class BoardCard(BaseModel):
+    id: int
+    title: str
+    company: str | None
+    location: str | None
+    is_remote: bool | None
+    score: int | None
+    pipeline_status: PipelineStatus
+    applied_at: datetime | None
+    deadline: date | None
+    closing_soon: bool
+    has_resume: bool
+    has_cover_letter: bool
+    needs_attention: bool
+    follow_up: Literal["date", "waiting"] | None   # why it is due for a follow-up today, if it is
+    status_since: datetime               # when it last changed status (not yet acted on: when it was scored)
+
+
+BoardColumnKey = Literal["not_applied", "applied", "in_progress", "interview", "offer", "rejected"]
+
+
+class BoardColumn(BaseModel):
+    key: BoardColumnKey
+    total: int                           # every job in the column
+    items: list[BoardCard]               # at most 40
+
+
+class BoardClosed(BaseModel):
+    withdrawn: int
+    skipped: int
+
+
+class FollowUp(BaseModel):
+    """One job that is due for a follow-up today (version 3b)."""
+    id: int
+    title: str
+    company: str | None
+    location: str | None
+    score: int | None
+    pipeline_status: PipelineStatus
+    reason: Literal["date", "waiting"]   # your follow-up date has come, or it has waited the set number of days with no reply
+    follow_up_on: date | None
+    applied_on: date | None
+    days_waiting: int | None
+    contact_name: str | None
+    contact_email: str | None
+    referral: str | None
+
+
+class Board(BaseModel):
+    generated_at: datetime
+    columns: list[BoardColumn]
+    today: date                          # today in the configured time zone: the page counts reminders from it
+    follow_up_days: int                  # days an application waits before it is due (the setting)
+    follow_ups_total: int
+    follow_ups: list[FollowUp]           # the first 20: dates first, then the longest waiting
+    closed: BoardClosed
+
+
+# ---------------------------------------------------------------- version 3b: notes, contacts, follow-up dates
+# dashboard_job_tracking() and dashboard_set_tracking() (migration 019). The limits repeat the table's; the database
+# is what enforces them, and tests/test_store_pg.py checks the two agree.
+
+def _no_nul(value: str | None) -> str | None:
+    if value is not None and "\x00" in value:       # Postgres text cannot hold it; better a 422 than a 500
+        raise ValueError("a value cannot contain a NUL character")
+    return value
+
+
+class Tracking(BaseModel):
+    notes: str | None
+    contact_name: str | None
+    contact_email: str | None
+    referral: str | None
+    follow_up_on: date | None
+    version: str | None                  # opaque: send it back with the next save; none until something is saved
+    today: date                          # today in the configured time zone (what "in 3 days" counts from)
+
+
+class TrackingSave(BaseModel):
+    """Only the fields sent change; null or an empty string clears one. `version` is what the last read said."""
+    model_config = ConfigDict(extra="forbid")
+
+    version: str | None = Field(default=None, max_length=64)
+    notes: Annotated[str | None, Field(max_length=2000)] = None
+    contact_name: Annotated[str | None, Field(max_length=100)] = None
+    contact_email: Annotated[str | None, Field(max_length=200)] = None
+    referral: Annotated[str | None, Field(max_length=200)] = None
+    follow_up_on: date | None = None
+
+    _nul = field_validator("version", "notes", "contact_name", "contact_email", "referral")(_no_nul)
+
+    @field_validator("follow_up_on", mode="before")
+    @classmethod
+    def _blank_date_clears(cls, value):
+        # an empty or blank string clears the date, like it does for the text fields
+        return None if isinstance(value, str) and not value.strip() else value
+
+    def patch(self) -> dict[str, str | None]:
+        """The fields that were sent (even as null), ready for the database function."""
+        out: dict[str, str | None] = {}
+        for name in ("notes", "contact_name", "contact_email", "referral"):
+            if name in self.model_fields_set:
+                out[name] = getattr(self, name)
+        if "follow_up_on" in self.model_fields_set:
+            out["follow_up_on"] = self.follow_up_on.isoformat() if self.follow_up_on else None
+        return out
+
+
+class UndoRequest(BaseModel):
+    """Take back the newest change of a job. `expected_status` is the status that change set (what the page showed after it);
+    `event_id` is given when the user picked an entry in the timeline, and must then still be the newest."""
+    model_config = ConfigDict(extra="forbid")
+
+    expected_status: PipelineStatus
+    event_id: StrictInt | None = Field(default=None, ge=1, le=2**63 - 1)
+
+
+class UndoResult(BaseModel):
+    id: int
+    status: PipelineStatus               # what the job is after the undo
+
+
+class FollowUpDays(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    days: StrictInt = Field(ge=1, le=90)
+
+
+class WeekStats(BaseModel):
+    week_start: date                     # a Monday, in the configured time zone
+    found: int
+    shortlisted: int
+    applied: int
+
+
+class Stats(BaseModel):
+    generated_at: datetime
+    timezone: str
+    applied: int                         # every application ever submitted
+    responded: int                       # of those, moved to in progress, interview, offer or rejected
+    reached_interview: int
+    reached_offer: int
+    avg_days_to_reply: float | None      # from real history only; none until at least one reply was measured
+    replies_measured: int
+    weekly: list[WeekStats]              # the last 12 weeks, oldest first
 
 
 # ---------------------------------------------------------------- version 2a: health, spend, pause

@@ -13,7 +13,7 @@ import psycopg
 import pytest
 from psycopg.conninfo import conninfo_to_dict
 
-from models import JobsQuery
+from models import Board, JobEvent, JobsQuery, Stats
 from store import Conflict, Forbidden, Invalid, NotFound, PgStore
 
 ADMIN_DSN = os.environ.get("DASHBOARD_TEST_ADMIN_DSN")
@@ -189,7 +189,7 @@ def test_the_api_end_to_end(ids, tmp_path, static_dir):
     assert c.get("/api/jobs/999999999").status_code == 404
     r = c.patch(f"/api/jobs/{ids['acme']}/status", headers=WRITE,
                 json={"status": "approved", "expected_status": "shortlisted"})
-    assert r.status_code == 200 and r.json() == {"id": ids["acme"], "status": "approved"}
+    assert r.status_code == 200 and r.json() == {"id": ids["acme"], "status": "approved", "event_id": r.json()["event_id"]} and r.json()["event_id"]
     r = c.patch(f"/api/jobs/{ids['acme']}/status", headers=WRITE,
                 json={"status": "skipped", "expected_status": "shortlisted"})
     assert r.status_code == 409 and r.json()["current_status"] == "approved"
@@ -272,3 +272,138 @@ def test_the_dashboard_role_cannot_touch_the_tables_behind_the_panels(ids):
                     "UPDATE schedule_control SET paused = true", "SELECT requeue_jobs('score')", "SELECT schedule_status()"):
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 conn.execute(sql)
+
+
+def test_the_numbers_agree_with_each_other_on_awkward_histories(store, ids):
+    """Reply figures never exceed the applied figure, whatever order a job went through the stages."""
+    _admin("SELECT set_application_status(%s, 'interview')", (ids["beta"],))             # straight to interview
+    _admin("SELECT set_application_status(%s, 'applied')", (ids["acme"],))
+    _admin("SELECT set_application_status(%s, 'offer')", (ids["acme"],))
+    _admin("SELECT set_application_status(%s, 'skipped')", (ids["acme"],))                # applied_at is kept
+    stats = Stats.model_validate(store.stats())
+    assert stats.applied >= stats.responded >= stats.reached_interview >= stats.reached_offer >= 1
+    assert sum(w.applied for w in stats.weekly) == stats.applied, "every submitted job is in exactly one week"
+
+
+# ---------------------------------------------------------------- version 3b: notes, contacts, follow-ups
+
+def test_tracking_round_trip_with_the_version_check(store, ids):
+    from models import Tracking
+    from store import TrackingChanged
+    job = ids["beta"]
+    empty = Tracking.model_validate(store.job_tracking(job))
+    assert empty.version is None and empty.notes is None
+    from datetime import date, timedelta
+    when = (date.today() + timedelta(days=30)).isoformat()
+    saved = Tracking.model_validate(store.set_tracking(job, None, {"notes": "  met at the fair ", "contact_name": "Priya N", "follow_up_on": when}))
+    assert saved.notes == "met at the fair" and str(saved.follow_up_on) == when and saved.version
+    assert saved.today and empty.today == saved.today
+    with pytest.raises(TrackingChanged):
+        store.set_tracking(job, None, {"notes": "from a stale page"})
+    again = Tracking.model_validate(store.set_tracking(job, saved.version, {"referral": "via Sam"}))
+    assert again.version != saved.version and again.notes == "met at the fair" and again.referral == "via Sam"
+    assert Tracking.model_validate(store.job_tracking(job)) == again
+    gone = Tracking.model_validate(store.set_tracking(job, again.version, {"notes": "", "contact_name": None, "referral": None, "follow_up_on": None}))
+    assert gone.version is None
+
+
+def test_tracking_refusals_carry_the_database_s_reason(store, ids):
+    with pytest.raises(Invalid, match="email"):
+        store.set_tracking(ids["acme"], None, {"contact_email": "nope"})
+    with pytest.raises(Invalid):
+        store.set_tracking(ids["acme"], None, {"follow_up_on": "2999-01-01"})
+    with pytest.raises(NotFound):
+        store.set_tracking(10**12, None, {"notes": "x"})
+    with pytest.raises(NotFound):
+        store.job_tracking(10**12)
+    with pytest.raises(Invalid):
+        store.set_tracking(ids["acme"], None, {"notes": "a\x00b"})        # the database refuses a NUL even if the API did not
+
+
+def test_the_api_limits_match_the_database(store, ids):
+    """The Pydantic limits and the table's limits are the same numbers: the longest accepted by one is accepted by the other."""
+    from models import TrackingSave
+    longest = {"notes": "n" * 2000, "contact_name": "c" * 100, "contact_email": "e" * 190 + "@x.example", "referral": "r" * 200}
+    TrackingSave(**longest)
+    store.set_tracking(ids["acme"], None, TrackingSave(**longest).patch())
+    store.set_tracking(ids["acme"], store.job_tracking(ids["acme"])["version"], {"notes": None, "contact_name": None, "contact_email": None, "referral": None})
+    for field, size in (("notes", 2001), ("contact_name", 101), ("referral", 201)):
+        with pytest.raises(ValueError):
+            TrackingSave(**{field: "x" * size})
+
+
+def test_the_board_lists_what_is_due_and_the_setting_changes_it(store, ids):
+    from models import Board
+    _admin("SELECT set_application_status(%s, 'applied')", (ids["tailored"],))
+    _admin("UPDATE applications SET applied_at = now() - interval '20 days' WHERE job_id = %s", (ids["tailored"],))
+    try:
+        board = Board.model_validate(store.board())
+        due = {f.id: f for f in board.follow_ups}
+        assert board.today and due[ids["tailored"]].reason == "waiting" and due[ids["tailored"]].days_waiting >= 20
+        card = next(c for col in board.columns for c in col.items if c.id == ids["tailored"])
+        assert card.follow_up == "waiting"
+        assert store.set_follow_up_days(60) == 60
+        assert ids["tailored"] not in {f.id for f in Board.model_validate(store.board()).follow_ups}
+        with pytest.raises(Invalid):
+            store.set_follow_up_days(0)
+    finally:
+        _admin("UPDATE follow_up_settings SET days = 7")
+
+
+def test_the_role_cannot_touch_the_tracking_tables(ids):
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        for sql in ("SELECT 1 FROM job_tracking", "SELECT 1 FROM follow_up_settings", "DELETE FROM job_tracking",
+                    "SELECT 1 FROM follow_ups_due()"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(sql)
+
+
+# ---------------------------------------------------------------- undo
+
+def test_undo_takes_back_a_mistaken_move_so_the_numbers_never_see_it(store, ids):
+    from models import JobEvent, Stats
+    from store import HistoryChanged
+    job = _admin("SELECT job_id FROM upsert_job('indeed', 'undo-1', 'https://example.com/undo-1', NULL, 'Undo Role', 'UndoCo', 'Pune',"
+                 " false, now(), 'about undo', NULL, NULL, NULL, '{}'::jsonb)")[0][0]
+    _admin("UPDATE jobs SET status = 'shortlisted', score = 80 WHERE id = %s", (job,))
+    before = Stats.model_validate(store.stats())
+    store.set_status(job, "applied", "shortlisted", None)
+    store.set_status(job, "offer", "applied", "dropped on the wrong column")
+    assert Stats.model_validate(store.stats()).reached_offer == before.reached_offer + 1
+    events = [JobEvent.model_validate(e) for e in store.job_events(job)]
+    assert [e.undoable for e in events] == [False, True]
+    with pytest.raises(HistoryChanged):
+        store.undo_status(job, "offer", events[0].id)                        # not the newest
+    assert store.undo_status(job, "offer", events[1].id) == {"id": job, "status": "applied"}
+    assert Stats.model_validate(store.stats()).reached_offer == before.reached_offer
+    assert [e["to_status"] for e in store.job_events(job)] == ["applied"]
+    with pytest.raises(HistoryChanged):
+        store.undo_status(job, "offer", None)                                 # that move is gone
+    assert store.undo_status(job, "applied", None) == {"id": job, "status": "shortlisted"}
+    assert store.job_events(job) == []
+
+
+def test_undo_refusals_reach_the_api_layer_as_the_right_errors(store, ids):
+    with pytest.raises(Forbidden):
+        store.undo_status(ids["scam"], "applied", None)
+    with pytest.raises(NotFound):
+        store.undo_status(10**12, "applied", None)
+    with pytest.raises(Invalid, match="dashboard"):
+        store.undo_status(ids["interview"], "interview", None)               # made through the CLI in the seed
+
+
+def test_a_move_names_its_entry_and_a_no_op_names_none(store, ids):
+    job = _admin("SELECT job_id FROM upsert_job('indeed', 'undo-2', 'https://example.com/undo-2', NULL, 'Undo Role 2', 'UndoCo2', 'Pune',"
+                 " false, now(), 'about undo', NULL, NULL, NULL, '{}'::jsonb)")[0][0]
+    _admin("UPDATE jobs SET status = 'shortlisted', score = 80 WHERE id = %s", (job,))
+    first = store.move_status(job, "applied", "shortlisted", None)
+    newest = store.job_events(job)[-1]["id"]
+    assert first == {"status": "applied", "event_id": newest}
+    assert store.move_status(job, "applied", "applied", "") == {"status": "applied", "event_id": None}
+    assert len(store.job_events(job)) == 1, "the no-op wrote nothing, so there is nothing for an Undo to take back"
+    second = store.move_status(job, "interview", "applied", "phone screen")
+    assert second["event_id"] and second["event_id"] != newest
+    from store import HistoryChanged
+    with pytest.raises(HistoryChanged):
+        store.undo_status(job, "interview", newest)                              # the older entry, by its id
+    assert store.undo_status(job, "interview", second["event_id"]) == {"id": job, "status": "applied"}

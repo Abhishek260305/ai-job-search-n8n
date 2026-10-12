@@ -127,6 +127,26 @@ class PgStore:
                 "ORDER BY score DESC NULLS LAST, id LIMIT %s", (limit,))
             return cur.fetchall()
 
+    def follow_ups_for_digest(self) -> list[dict]:
+        """What is due for a follow-up, for the daily message: nothing unless the user switched it on (follow_up_settings.digest).
+        A database that has not had migration 019 yet has no reminders, and the digest still goes out."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT digest FROM follow_up_settings WHERE id = 1")
+                row = cur.fetchone()
+                if not row or not row["digest"]:
+                    return []
+                # `total` is every job that is due (the list is cut at 50), `today` is the date in the configured time zone
+                cur.execute(
+                    "SELECT j.title, j.company, d.reason, d.follow_up_on, d.applied_on, d.days_waiting, t.contact_name, "
+                    "count(*) OVER () AS total, "
+                    "(now() AT TIME ZONE coalesce((SELECT timezone FROM budget_settings WHERE id = 1), 'UTC'))::date AS today "
+                    "FROM follow_ups_due() d JOIN jobs j ON j.id = d.job_id LEFT JOIN job_tracking t ON t.job_id = d.job_id "
+                    "ORDER BY (d.reason = 'date') DESC, d.follow_up_on, d.applied_on, j.id LIMIT 50")
+                return cur.fetchall()
+        except (psycopg.errors.UndefinedTable, psycopg.errors.UndefinedFunction):
+            return []
+
     def mark_notified(self, ids: list[int]) -> int:
         with self.cursor() as cur:
             cur.execute("UPDATE jobs SET notified_at = now() WHERE id = ANY(%s::bigint[]) AND notified_at IS NULL", (ids,))

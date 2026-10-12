@@ -24,6 +24,8 @@ Commands:
   boards find NAME...     look up a company's job-board slug (Greenhouse, Lever, Ashby, Workable, SmartRecruiters)
   parked, requeue         jobs that ran out of attempts, and putting them back in the queue
   reshortlist             promote scored jobs that are above a threshold you lowered after they were scored
+  follow-up [--days N] [--digest on|off]   what is due for a follow-up (applied N days ago with no reply, or a date you set
+                          on the dashboard), the days setting, and whether the Telegram digest mentions it
   tailor-settings [set]   mode, approval, score band, daily limit, cover letter, fact check
   migrate                 apply pending database migrations
   validate                validate config/profile.json, resume.json, search.json
@@ -869,6 +871,61 @@ def run_reshortlist(stack, apply: bool = False) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------- follow-ups (dashboard version 3b)
+
+def follow_up_sql(days: Optional[int], digest: Optional[bool]) -> str:
+    """The one UPDATE behind `follow-up --days N --digest on|off`. The values are checked here and never pasted as text."""
+    sets = []
+    if days is not None:
+        if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 90:
+            raise ValueError("days must be a whole number from 1 to 90")
+        sets.append(f"days = {days}")
+    if digest is not None:
+        if not isinstance(digest, bool):
+            raise ValueError("digest must be on or off")
+        sets.append(f"digest = {'true' if digest else 'false'}")
+    if not sets:
+        raise ValueError("give --days N and/or --digest on|off")
+    return "UPDATE follow_up_settings SET " + ", ".join(sets) + ", updated_at = now() WHERE id = 1;"
+
+
+def run_follow_up(stack, days: Optional[int] = None, digest: Optional[bool] = None) -> str:
+    """Show the reminders and their two settings; optionally change them."""
+    prefix = ""
+    try:
+        if days is not None or digest is not None:
+            stack.psql(follow_up_sql(days, digest))
+            prefix = "saved.\n\n"
+        settings = stack.query_json("select days, digest from follow_up_settings where id = 1")
+        due = stack.query_json(
+            "select j.id, j.title, j.company, d.reason, d.follow_up_on, d.days_waiting, t.contact_name "
+            "from follow_ups_due() d join jobs j on j.id = d.job_id left join job_tracking t on t.job_id = d.job_id "
+            "order by (d.reason = 'date') desc, d.follow_up_on, d.applied_on, j.id")
+    except StackError as e:
+        # only a missing follow-up table or function means "migration 019 not applied" (not a missing database or role)
+        if re.search(r'(relation|function) "?(follow_up_settings|follow_ups_due|job_tracking)', str(e)) and "does not exist" in str(e):
+            saved = "nothing was changed. " if (days is not None or digest is not None) else ""
+            return f"follow-up reminders need database migration 019, {saved}run  scripts/jobsearch migrate"
+        raise
+    if not settings:
+        return "follow-up settings are missing from the database: run  scripts/jobsearch migrate"
+    n, on = settings[0]["days"], bool(settings[0]["digest"])
+    lines = [prefix + f"An application with no reply is due for a follow-up after {n} day{'s' if n != 1 else ''} "
+             f"(a date you set on the dashboard wins over this).",
+             f"The daily Telegram message {'lists' if on else 'does not list'} what is due.",
+             "change:  scripts/jobsearch follow-up --days N | --digest on|off", ""]
+    if not due:
+        lines.append("Nothing is due for a follow-up today.")
+    else:
+        lines.append(f"{len(due)} due:")
+        for r in due:
+            why = (f"follow-up date {r['follow_up_on']}" if r["reason"] == "date"
+                   else f"applied {r['days_waiting']} day{'s' if r['days_waiting'] != 1 else ''} ago, no reply")
+            who = f"  ({r['contact_name']})" if r.get("contact_name") else ""
+            lines.append(f"  #{r['id']:<5} {r['title']} @ {r['company']}: {why}{who}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------- schedules
 
 def run_schedule(stack, name: Optional[str] = None, changes: Optional[dict] = None, run: bool = False,
@@ -1455,6 +1512,10 @@ def build_parser() -> argparse.ArgumentParser:
     rq.add_argument("stage", choices=["score", "tailor"])
     rq.add_argument("job_id", nargs="?", type=int, help="one job; omit for every parked job of the stage")
 
+    fu = sub.add_parser("follow-up", help="what is due for a follow-up, and the reminder settings")
+    fu.add_argument("--days", type=int, help="days an application waits for a reply before it is due (1 to 90)")
+    fu.add_argument("--digest", choices=["on", "off"], help="list what is due in the daily Telegram message")
+
     rs = sub.add_parser("reshortlist", help="shortlist scored jobs that are above a threshold lowered after they were scored")
     rs.add_argument("--apply", action="store_true", help="do it (without this, only list them)")
 
@@ -1576,6 +1637,9 @@ def main(argv=None, stack=None, stdin=None) -> int:
         if args.cmd == "requeue":
             rows = stack.query_json(requeue_sql(args.stage, args.job_id))
             print(f"{rows[0]['n'] if rows else 0} job(s) put back in the {args.stage} queue.")
+            return 0
+        if args.cmd == "follow-up":
+            print(run_follow_up(stack, args.days, None if args.digest is None else args.digest == "on"))
             return 0
         if args.cmd == "reshortlist":
             print(run_reshortlist(stack, apply=args.apply))

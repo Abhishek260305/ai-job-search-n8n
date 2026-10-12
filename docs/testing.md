@@ -80,7 +80,7 @@ cd dashboard/web && npm ci && npm test && npm run typecheck && npm run lint && n
 
 **The Search page (version 2c)** is tested at four levels: the scraper's endpoints (validation, a stale version, the board probe), the CLI (the guard, `pull`, the doctor note), the dashboard API (every shape and refusal) and the page. `tests/test_settings_service.py` fails if the profile fields the page sends drift from `scraper/profile_tools.PROFILE_KEYS`. It was also run once for real: the real scraper and dashboard over a database copy, a live company lookup, and the CLI's own SQL and `pull` against that database.
 
-**SQL:** migrations 014, 016 and 017 (the views, the functions, every alert rule, pause and resume, and the role's grants) are covered in `postgres/tests/test_migrations.sql`, run by `docker compose exec -T postgres sh /tests/run.sh` like the rest.
+**SQL:** migrations 014, 016, 017, 018, 019 and 020 (the views, the history trigger, the board and stats, the functions, every alert rule, pause and resume, and the role's grants) are covered in `postgres/tests/test_migrations.sql`, run by `docker compose exec -T postgres sh /tests/run.sh` like the rest.
 
 **The scripts** `scripts/init-env.sh`, `scripts/tunnel.sh`, `scripts/check-secrets.sh`, `scripts/backup.sh` and `dashboard/db-init.sh` are tested in `cli/tests/test_scripts.py` (part of `scripts/test.sh`); `SCRIPTS_SH=dash` runs them under `dash` as well, to catch shell features `/bin/sh` may lack.
 

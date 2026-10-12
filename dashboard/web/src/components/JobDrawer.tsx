@@ -3,6 +3,8 @@ import { type ReactNode, useId, useState } from 'react'
 import { ApiError } from '@/api/client'
 import { useJob, useJobs, useSummary } from '@/api/hooks'
 import type { JobDetail } from '@/api/types'
+import JobTimeline from '@/components/board/JobTimeline'
+import TrackingForm from '@/components/board/TrackingForm'
 import StatusBadge from '@/components/StatusBadge'
 import StatusSelect from '@/components/StatusSelect'
 import { Badge } from '@/components/ui/badge'
@@ -264,6 +266,8 @@ function JobBody({ job }: { job: JobDetail }) {
         <Description text={job.description} />
         <FoundOn job={job} />
         <Application job={job} />
+        <Section title="Notes and follow-up"><TrackingForm id={job.id} /></Section>
+        {job.application_status && <Section title="History"><JobTimeline id={job.id} /></Section>}
       </div>
     </>
   )
@@ -298,14 +302,34 @@ function JobPanel({ id }: { id: number }) {
   return <JobBody job={job.data} />
 }
 
-/** The details of the job in `?job=`, beside the table. Escape, the close button or a click outside clear it. */
-export default function JobDrawer() {
-  const { view, jobId, setView } = useJobsParams()
+function JobNav({ jobId }: { jobId: number | null }) {
+  const { view, setView } = useJobsParams()
   const jobs = useJobs(view)
+  const { prev, next, position } = neighbours(jobs.data?.items.map((r) => r.id) ?? [], jobId)
+  return (
+    <nav aria-label="Jobs on this page" className="flex h-12 shrink-0 items-center gap-1 border-b px-3 pr-12">
+      <Button variant="ghost" size="icon-sm" aria-label="Previous job" disabled={prev === null} onClick={() => setView(view, prev)}>
+        <ChevronLeft aria-hidden="true" />
+      </Button>
+      <Button variant="ghost" size="icon-sm" aria-label="Next job" disabled={next === null} onClick={() => setView(view, next)}>
+        <ChevronRight aria-hidden="true" />
+      </Button>
+      {position !== null && jobs.data && (
+        <span className="text-xs text-muted-foreground tabular-nums">{position} of {jobs.data.items.length} on this page</span>
+      )}
+    </nav>
+  )
+}
+
+/**
+ * The details of the job in `?job=`, beside the table. Escape, the close button or a click outside clear it.
+ * `neighbours={false}` is for a page that is not the jobs table (the board): there is no "next job on this page".
+ */
+export default function JobDrawer({ neighbours: withNeighbours = true }: { neighbours?: boolean }) {
+  const { view, jobId, setView } = useJobsParams()
   // the last job stays rendered while the panel slides out
   const [shown, setShown] = useState(jobId)
   if (jobId !== null && jobId !== shown) setShown(jobId)
-  const { prev, next, position } = neighbours(jobs.data?.items.map((r) => r.id) ?? [], jobId)
 
   function focusRow(event: Event) {
     const title = document.querySelector<HTMLElement>(`[data-job-title="${shown}"]`)
@@ -318,17 +342,7 @@ export default function JobDrawer() {
   return (
     <Sheet open={jobId !== null} onOpenChange={(open) => { if (!open) setView(view, null) }}>
       <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl" onCloseAutoFocus={focusRow}>
-        <nav aria-label="Jobs on this page" className="flex h-12 shrink-0 items-center gap-1 border-b px-3 pr-12">
-          <Button variant="ghost" size="icon-sm" aria-label="Previous job" disabled={prev === null} onClick={() => setView(view, prev)}>
-            <ChevronLeft aria-hidden="true" />
-          </Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Next job" disabled={next === null} onClick={() => setView(view, next)}>
-            <ChevronRight aria-hidden="true" />
-          </Button>
-          {position !== null && jobs.data && (
-            <span className="text-xs text-muted-foreground tabular-nums">{position} of {jobs.data.items.length} on this page</span>
-          )}
-        </nav>
+        {withNeighbours ? <JobNav jobId={jobId} /> : <div aria-hidden="true" className="h-12 shrink-0 border-b" />}
         {shown !== null && <JobPanel key={shown} id={shown} />}
       </SheetContent>
     </Sheet>

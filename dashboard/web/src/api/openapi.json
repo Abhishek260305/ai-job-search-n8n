@@ -599,6 +599,352 @@
         }
       }
     },
+    "/api/jobs/{job_id}/events": {
+      "get": {
+        "summary": "Job Events",
+        "operationId": "job_events_api_jobs__job_id__events_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobEvent"
+                  },
+                  "title": "Response Job Events Api Jobs  Job Id  Events Get"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/undo": {
+      "post": {
+        "summary": "Undo Status",
+        "operationId": "undo_status_api_jobs__job_id__undo_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UndoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UndoResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/tracking": {
+      "get": {
+        "summary": "Job Tracking",
+        "operationId": "job_tracking_api_jobs__job_id__tracking_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tracking"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Save Tracking",
+        "operationId": "save_tracking_api_jobs__job_id__tracking_put",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackingSave"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tracking"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/files/{kind}": {
       "get": {
         "summary": "Application File",
@@ -946,6 +1292,200 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/board": {
+      "get": {
+        "summary": "Board",
+        "operationId": "board_api_board_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Board"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/follow-ups/days": {
+      "put": {
+        "summary": "Follow Up Days",
+        "operationId": "follow_up_days_api_follow_ups_days_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FollowUpDays"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowUpDays"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/stats": {
+      "get": {
+        "summary": "Stats",
+        "operationId": "stats_api_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Stats"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
                 }
               }
             }
@@ -1991,6 +2531,265 @@
         ],
         "title": "ApifySpend"
       },
+      "Board": {
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/BoardColumn"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "today": {
+            "type": "string",
+            "format": "date",
+            "title": "Today"
+          },
+          "follow_up_days": {
+            "type": "integer",
+            "title": "Follow Up Days"
+          },
+          "follow_ups_total": {
+            "type": "integer",
+            "title": "Follow Ups Total"
+          },
+          "follow_ups": {
+            "items": {
+              "$ref": "#/components/schemas/FollowUp"
+            },
+            "type": "array",
+            "title": "Follow Ups"
+          },
+          "closed": {
+            "$ref": "#/components/schemas/BoardClosed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_at",
+          "columns",
+          "today",
+          "follow_up_days",
+          "follow_ups_total",
+          "follow_ups",
+          "closed"
+        ],
+        "title": "Board"
+      },
+      "BoardCard": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "is_remote": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Remote"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "pipeline_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Pipeline Status"
+          },
+          "applied_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At"
+          },
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline"
+          },
+          "closing_soon": {
+            "type": "boolean",
+            "title": "Closing Soon"
+          },
+          "has_resume": {
+            "type": "boolean",
+            "title": "Has Resume"
+          },
+          "has_cover_letter": {
+            "type": "boolean",
+            "title": "Has Cover Letter"
+          },
+          "needs_attention": {
+            "type": "boolean",
+            "title": "Needs Attention"
+          },
+          "follow_up": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "date",
+                  "waiting"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Up"
+          },
+          "status_since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Status Since"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "company",
+          "location",
+          "is_remote",
+          "score",
+          "pipeline_status",
+          "applied_at",
+          "deadline",
+          "closing_soon",
+          "has_resume",
+          "has_cover_letter",
+          "needs_attention",
+          "follow_up",
+          "status_since"
+        ],
+        "title": "BoardCard"
+      },
+      "BoardClosed": {
+        "properties": {
+          "withdrawn": {
+            "type": "integer",
+            "title": "Withdrawn"
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "withdrawn",
+          "skipped"
+        ],
+        "title": "BoardClosed"
+      },
+      "BoardColumn": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "not_applied",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected"
+            ],
+            "title": "Key"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/BoardCard"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "total",
+          "items"
+        ],
+        "title": "BoardColumn"
+      },
       "BoardEntry": {
         "properties": {
           "slug": {
@@ -2573,6 +3372,183 @@
           "matches"
         ],
         "title": "FindResult"
+      },
+      "FollowUp": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "pipeline_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Pipeline Status"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "date",
+              "waiting"
+            ],
+            "title": "Reason"
+          },
+          "follow_up_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Up On"
+          },
+          "applied_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied On"
+          },
+          "days_waiting": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days Waiting"
+          },
+          "contact_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Name"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Email"
+          },
+          "referral": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Referral"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "company",
+          "location",
+          "score",
+          "pipeline_status",
+          "reason",
+          "follow_up_on",
+          "applied_on",
+          "days_waiting",
+          "contact_name",
+          "contact_email",
+          "referral"
+        ],
+        "title": "FollowUp",
+        "description": "One job that is due for a follow-up today (version 3b)."
+      },
+      "FollowUpDays": {
+        "properties": {
+          "days": {
+            "type": "integer",
+            "maximum": 90.0,
+            "minimum": 1.0,
+            "title": "Days"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "days"
+        ],
+        "title": "FollowUpDays"
       },
       "FunnelStep": {
         "properties": {
@@ -3210,6 +4186,75 @@
         ],
         "title": "JobDetail",
         "description": "v_dashboard_job_detail plus every listing of the job."
+      },
+      "JobEvent": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "from_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Status"
+          },
+          "to_status": {
+            "type": "string",
+            "title": "To Status"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "dashboard",
+                  "backfill"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "undoable": {
+            "type": "boolean",
+            "title": "Undoable",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "from_status",
+          "to_status",
+          "note",
+          "source",
+          "at"
+        ],
+        "title": "JobEvent"
       },
       "JobPage": {
         "properties": {
@@ -4744,6 +5789,70 @@
         ],
         "title": "Spend"
       },
+      "Stats": {
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "applied": {
+            "type": "integer",
+            "title": "Applied"
+          },
+          "responded": {
+            "type": "integer",
+            "title": "Responded"
+          },
+          "reached_interview": {
+            "type": "integer",
+            "title": "Reached Interview"
+          },
+          "reached_offer": {
+            "type": "integer",
+            "title": "Reached Offer"
+          },
+          "avg_days_to_reply": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Days To Reply"
+          },
+          "replies_measured": {
+            "type": "integer",
+            "title": "Replies Measured"
+          },
+          "weekly": {
+            "items": {
+              "$ref": "#/components/schemas/WeekStats"
+            },
+            "type": "array",
+            "title": "Weekly"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_at",
+          "timezone",
+          "applied",
+          "responded",
+          "reached_interview",
+          "reached_offer",
+          "avg_days_to_reply",
+          "replies_measured",
+          "weekly"
+        ],
+        "title": "Stats"
+      },
       "StatusChange": {
         "properties": {
           "status": {
@@ -4822,6 +5931,17 @@
               "withdrawn"
             ],
             "title": "Status"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
           }
         },
         "type": "object",
@@ -5056,6 +6176,255 @@
         ],
         "title": "TailoringSettings"
       },
+      "Tracking": {
+        "properties": {
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "contact_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Name"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Email"
+          },
+          "referral": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Referral"
+          },
+          "follow_up_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Up On"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "today": {
+            "type": "string",
+            "format": "date",
+            "title": "Today"
+          }
+        },
+        "type": "object",
+        "required": [
+          "notes",
+          "contact_name",
+          "contact_email",
+          "referral",
+          "follow_up_on",
+          "version",
+          "today"
+        ],
+        "title": "Tracking"
+      },
+      "TrackingSave": {
+        "properties": {
+          "version": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "contact_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Name"
+          },
+          "contact_email": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contact Email"
+          },
+          "referral": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Referral"
+          },
+          "follow_up_on": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Up On"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TrackingSave",
+        "description": "Only the fields sent change; null or an empty string clears one. `version` is what the last read said."
+      },
+      "UndoRequest": {
+        "properties": {
+          "expected_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Expected Status"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 9.223372036854776e+18,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_status"
+        ],
+        "title": "UndoRequest",
+        "description": "Take back the newest change of a job. `expected_status` is the status that change set (what the page showed after it);\n`event_id` is given when the user picked an entry in the timeline, and must then still be the newest."
+      },
+      "UndoResult": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "UndoResult"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -5095,6 +6464,35 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WeekStats": {
+        "properties": {
+          "week_start": {
+            "type": "string",
+            "format": "date",
+            "title": "Week Start"
+          },
+          "found": {
+            "type": "integer",
+            "title": "Found"
+          },
+          "shortlisted": {
+            "type": "integer",
+            "title": "Shortlisted"
+          },
+          "applied": {
+            "type": "integer",
+            "title": "Applied"
+          }
+        },
+        "type": "object",
+        "required": [
+          "week_start",
+          "found",
+          "shortlisted",
+          "applied"
+        ],
+        "title": "WeekStats"
       }
     }
   }

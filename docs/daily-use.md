@@ -22,7 +22,7 @@ How many jobs reach "shortlisted" depends on your profile and threshold (default
 
 **Each day, about five minutes:**
 
-1. Read the **digest** (or send `/review` to see what is waiting).
+1. Read the **digest** (or send `/review` to see what is waiting). If you switched it on (`scripts/jobsearch follow-up --digest on`), the digest also lists the jobs due for a follow-up.
 2. For each application you are interested in, open the PDFs and `summary.md`. **Read them.** The honesty checks are strong, not perfect, and anything flagged "needs attention" says exactly what was removed or doubtful.
 3. Decide: `/approve 24` (ready to apply), or `/skip 24` (not interested; you can still approve it later).
 4. Apply on the employer's own site yourself, then send `/applied 24` so the system knows. Later, record how it went: `/mark 24 interview`, `/mark 24 rejected`, ... (see [tracking](customization.md#tracking-after-you-apply-without-gmail)).

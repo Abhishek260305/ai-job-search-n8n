@@ -13,7 +13,14 @@ Routes (see auth.py for how login works):
   GET  /api/summary       the cards, the donut and the funnel
   GET  /api/jobs          one page of the jobs table (tab, filters, sort, page: models.JobsQuery)
   GET  /api/jobs/{id}     one job with every listing, for the details panel
-  PATCH /api/jobs/{id}/status   {status, expected_status, note?}; 409 with current_status if it changed elsewhere
+  GET  /api/jobs/{id}/events   its timeline: every status change, with the note and who made it, and which one can be undone
+  POST /api/jobs/{id}/undo   {expected_status, event_id?} takes back the newest change if it was made here; 409 if it moved on
+  GET/PUT /api/jobs/{id}/tracking   notes, contact, referral and follow-up date of a job; a save needs the version it read (409 if changed)
+  PUT  /api/follow-ups/days   after how many days with no reply an application is due for a follow-up
+  GET  /api/board         the Kanban board: the cards of every column, the true totals and what is due for a follow-up
+  GET  /api/stats         response rate, days to a first reply and the last 12 weeks
+  PATCH /api/jobs/{id}/status   {status, expected_status, note?}; 409 with current_status if it changed elsewhere; the answer
+                          names the history entry it wrote (event_id), which is what Undo is tied to
   GET  /api/jobs/{id}/files/{resume|cover_letter}   the tailored PDF, shown in the browser
   GET  /api/export.csv    the jobs table with the same filters, every page (up to 5,000 rows)
   GET  /api/pipeline      the health panel: pause state, schedules, scoring queue, parked jobs, failing sources, alerts
@@ -51,9 +58,10 @@ import settings_service
 from models import (BudgetChange, ErrorBody, FeaturesChange, FindBoard, FindResult, Health, JobDetail, JobPage, JobsQuery, PauseRequest, PauseState,
                     RunRequested, ScheduleChange, ScheduleName, SearchPage, SearchSave, SettingsPage, Spend, StatusChange,
                     StatusResult, Summary, TailoringChange)
+from models import Board, FollowUpDays, JobEvent, Stats, Tracking, TrackingSave, UndoRequest, UndoResult
 from scraper_client import ScraperClient
 from settings import Settings, SettingsError, load_settings
-from store import Conflict, Forbidden, Invalid, NotFound, PgStore, ProfileChanged, StoreError, Unavailable
+from store import Conflict, Forbidden, Invalid, NotFound, HistoryChanged, PgStore, ProfileChanged, StoreError, TrackingChanged, Unavailable
 
 PUBLIC_API = frozenset({"/api/health", "/api/openapi.json", "/api/login", "/api/logout"})
 SECURITY_HEADERS = {
@@ -71,7 +79,7 @@ ASSET_CACHE = "public, max-age=31536000, immutable"   # Vite puts a content hash
 JobId = Annotated[int, Path(ge=1, le=2**63 - 1)]       # a bigint; anything larger would be a database error
 # 422 keeps FastAPI's schema (a list of field errors); the database's own 422 has a plain detail string.
 ERRORS = {code: {"model": ErrorBody} for code in (403, 404, 409, 503)}
-STORE_ERRORS = {NotFound: 404, Forbidden: 403, Invalid: 422, Conflict: 409, ProfileChanged: 409, Unavailable: 503}
+STORE_ERRORS = {NotFound: 404, Forbidden: 403, Invalid: 422, Conflict: 409, ProfileChanged: 409, TrackingChanged: 409, HistoryChanged: 409, Unavailable: 503}
 
 
 def host_without_port(host: str) -> str:
@@ -131,6 +139,10 @@ def create_app(settings: Settings, store, sessions: Sessions | None = None,
             body.detail = "job not found"
         elif isinstance(e, Conflict):
             body = ErrorBody(detail="the status was changed elsewhere; reload to see it", current_status=e.current)
+        elif isinstance(e, HistoryChanged):
+            body.detail = "The history of this job changed since you looked (or there is nothing left to undo). Reload to see it."
+        elif isinstance(e, TrackingChanged):
+            body.detail = "These notes were changed elsewhere (another tab or device). Reload to see the latest version."
         return JSONResponse(body.model_dump(exclude_none=True), status_code=status)
 
     @app.get("/api/health")
@@ -183,8 +195,27 @@ def create_app(settings: Settings, store, sessions: Sessions | None = None,
 
     @protected.patch("/jobs/{job_id}/status", response_model=StatusResult, responses=ERRORS)
     def set_status(job_id: JobId, change: StatusChange):
-        status = store.set_status(job_id, change.status, change.expected_status, change.note)
-        return StatusResult(id=job_id, status=status)
+        moved = store.move_status(job_id, change.status, change.expected_status, change.note)
+        return StatusResult(id=job_id, status=moved["status"], event_id=moved["event_id"])
+
+    @protected.get("/jobs/{job_id}/events", response_model=list[JobEvent], responses=ERRORS)
+    def job_events(job_id: JobId):
+        return store.job_events(job_id)
+
+    @protected.post("/jobs/{job_id}/undo", response_model=UndoResult, responses=ERRORS)
+    def undo_status(job_id: JobId, undo: UndoRequest):
+        return store.undo_status(job_id, undo.expected_status, undo.event_id)
+
+    @protected.get("/jobs/{job_id}/tracking", response_model=Tracking, responses=ERRORS)
+    def job_tracking(job_id: JobId):
+        return store.job_tracking(job_id)
+
+    @protected.put("/jobs/{job_id}/tracking", response_model=Tracking, responses=ERRORS)
+    def save_tracking(job_id: JobId, save: TrackingSave):
+        patch = save.patch()
+        if not patch:
+            raise Invalid("nothing to change")
+        return store.set_tracking(job_id, save.version, patch)
 
     @protected.get("/jobs/{job_id}/files/{kind}", response_class=FileResponse,
                    responses={200: {"content": {"application/pdf": {}}}, **ERRORS})
@@ -203,6 +234,19 @@ def create_app(settings: Settings, store, sessions: Sessions | None = None,
     def export_csv(q: Annotated[JobsQuery, Query()]):
         return Response(csv_export.to_csv(store.export_rows(q)), media_type="text/csv; charset=utf-8", headers={
             "Content-Disposition": f'attachment; filename="jobs-{date.today().isoformat()}.csv"'})
+
+    # ---- version 3a: the board (a move is the same PATCH /jobs/{id}/status as the table's menu) and the numbers.
+    @protected.get("/board", response_model=Board, responses=ERRORS)
+    def board():
+        return store.board()
+
+    @protected.put("/follow-ups/days", response_model=FollowUpDays, responses=ERRORS)
+    def follow_up_days(body: FollowUpDays):
+        return FollowUpDays(days=store.set_follow_up_days(body.days))
+
+    @protected.get("/stats", response_model=Stats, responses=ERRORS)
+    def stats():
+        return store.stats()
 
     @protected.get("/pipeline", response_model=Health, responses=ERRORS)
     def pipeline():

@@ -1,7 +1,7 @@
 """Database access for the dashboard.
 
 The dashboard connects as the jobsearch_dashboard role (migration 014), which can read the three v_dashboard_* views
-and run the three dashboard_* functions and nothing else. One connection per request: there is one user, and a
+and run the dashboard_* functions and nothing else. One connection per request: there is one user, and a
 pool would be one more dependency for no gain.
 
 The functions signal problems with their own SQLSTATEs, mapped here to exceptions the routes turn into HTTP codes:
@@ -16,6 +16,7 @@ from contextlib import contextmanager
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 import queries
 from models import JobsQuery
@@ -47,6 +48,14 @@ class ProfileChanged(StoreError):
     """The search profile was written by someone else (the CLI, another tab) since the page last read it."""
 
 
+class TrackingChanged(StoreError):
+    """The notes of a job were saved by someone else (another tab, your phone) since the page last read them."""
+
+
+class HistoryChanged(StoreError):
+    """The newest history entry of a job is not the one the page meant (or there is nothing to undo any more)."""
+
+
 class Conflict(StoreError):
     def __init__(self, message: str, current: str | None):
         super().__init__(message)
@@ -61,10 +70,17 @@ def _translate(e: psycopg.Error) -> StoreError | None:
     state = getattr(e, "sqlstate", None)
     diag = getattr(e, "diag", None)
     primary = (getattr(diag, "message_primary", None) or str(e)).strip()
+    if state == "JD413":
+        return HistoryChanged(primary)
+    if state == "JD412":
+        return TrackingChanged(primary)
     if state == "JD409":
         return Conflict(primary, getattr(diag, "message_detail", None))
     if state in _BY_SQLSTATE:
         return _BY_SQLSTATE[state](primary)
+    if state == "42883":                      # a function of a newer migration: the image is ahead of the database
+        log.warning("database needs its latest migration: %s", state)
+        return Unavailable("the database needs its latest migration: run scripts/jobsearch migrate")
     if isinstance(e, psycopg.DataError):      # a value Postgres cannot store (a NUL byte in text, a number out of range)
         return Invalid("that value cannot be stored")
     if state in _UNAVAILABLE_SQLSTATES or isinstance(e, psycopg.OperationalError):
@@ -129,6 +145,41 @@ class PgStore:
         with self._conn() as conn:
             return conn.execute("SELECT dashboard_set_status(%s, %s, %s, %s) AS s",
                                 (job_id, status, expected, note)).fetchone()["s"]
+
+    def job_events(self, job_id: int) -> list[dict]:
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_job_events(%s) AS e", (job_id,)).fetchone()["e"]
+
+    def job_tracking(self, job_id: int) -> dict:
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_job_tracking(%s) AS t", (job_id,)).fetchone()["t"]
+
+    def set_tracking(self, job_id: int, version: str | None, patch: dict) -> dict:
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_set_tracking(%s, %s, %s::jsonb) AS t",
+                                (job_id, version, Jsonb(patch))).fetchone()["t"]
+
+    def set_follow_up_days(self, days: int) -> int:
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_set_follow_up_days(%s) AS d", (days,)).fetchone()["d"]
+
+    def undo_status(self, job_id: int, expected: str, event_id: int | None) -> dict:
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_undo_status(%s, %s, %s) AS r", (job_id, expected, event_id)).fetchone()["r"]
+
+    def board(self) -> dict:
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_board() AS b").fetchone()["b"]
+
+    def stats(self) -> dict:
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_stats() AS s").fetchone()["s"]
+
+    def move_status(self, job_id: int, status: str, expected: str, note: str | None) -> dict:
+        """set_status, and also the id of the history entry it wrote (None when nothing was recorded)."""
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_move_status(%s, %s, %s, %s) AS m",
+                                (job_id, status, expected, note)).fetchone()["m"]
 
     def application_file(self, job_id: int, kind: str) -> str | None:
         with self._conn() as conn:

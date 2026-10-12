@@ -89,6 +89,9 @@ class FakeStore:
     def digest_rows(self, limit):
         return []
 
+    def follow_ups_for_digest(self):
+        return []
+
     def blocked_rows(self):
         return [{"id": j["id"], "title": j["title"], "company": j["company"], "location": j["location"],
                  "description": j["description"], "url": None, "posted_at": None, "is_remote": False}
@@ -355,6 +358,84 @@ def test_digest_adds_a_spend_footer_and_alerts_even_without_matches():
     assert quiet["count"] == 0 and quiet["text"] == quiet["alert"] != "" and quiet["ids"] == []
 
 
+def followup(i, **over):
+    r = {"title": f"Role {i}", "company": "Acme", "reason": "waiting", "follow_up_on": None, "applied_on": date(2026, 10, 1),
+         "days_waiting": 10, "contact_name": None}
+    r.update(over)
+    return r
+
+
+def test_followups_say_why_each_job_is_due():
+    today = date(2026, 10, 11)
+    t = PL.format_followups([followup(1), followup(2, reason="date", follow_up_on=today, days_waiting=None, contact_name="Priya N"),
+                             followup(3, reason="date", follow_up_on=date(2026, 10, 8), days_waiting=None), followup(4, days_waiting=1)], today)
+    assert t.splitlines()[0] == "⏰ Follow up (4):"
+    assert "- Role 1 @ Acme: applied 10 days ago, no reply" in t
+    assert "- Role 2 @ Acme: follow-up date is today (Priya N)" in t
+    assert "- Role 3 @ Acme: follow-up date was 2026-10-08" in t
+    assert "- Role 4 @ Acme: applied 1 day ago, no reply" in t
+
+
+def test_followups_use_the_total_and_the_date_the_database_gave():
+    rows = [followup(i, total=120, today=date(2026, 10, 13), reason="date", follow_up_on=date(2026, 10, 13), days_waiting=None) for i in range(3)]
+    t = PL.format_followups(rows)                                    # no `today` argument: the rows say it
+    assert t.startswith("⏰ Follow up (120):") and "follow-up date is today" in t and "was 2026-10-13" not in t
+    assert "... and 112 more" in t
+
+
+def test_followups_cut_long_fields_so_the_message_always_fits():
+    rows = [followup(i, title="t" * 600, company="c" * 600, contact_name="n" * 600) for i in range(30)]
+    d = PL.format_digest([], date(2026, 10, 11), None, rows)
+    assert len(d["text"]) < 2000 and "…" in d["text"] and "Follow up (30)" in d["text"]
+    spend = {"month_spent": 9.5, "monthly_cap": 10, "warn": True, "blocked": False, "blocked_reason": None}
+    assert len(PL.format_digest([row(i) for i in range(1, 60)], date(2026, 10, 11), spend, rows)["text"]) <= 4096
+
+
+def test_followups_collapse_line_breaks_in_titles():
+    t = PL.format_followups([followup(1, title="Backend\nEngineer\r\n(remote)")], date(2026, 10, 11))
+    assert "- Backend Engineer (remote) @ Acme" in t and t.count("\n") == 1
+
+
+def test_followups_are_capped_and_empty_is_empty():
+    assert PL.format_followups([]) == ""
+    t = PL.format_followups([followup(i) for i in range(12)], date(2026, 10, 11))
+    assert t.count("\n- ") == PL.FOLLOWUPS_SHOWN and "... and 4 more" in t and t.startswith("⏰ Follow up (12):")
+
+
+def test_followups_are_sent_on_their_own_when_there_are_no_new_matches():
+    d = PL.format_digest([], date(2026, 10, 11), None, [followup(1)])
+    assert d["count"] == 0 and d["ids"] == [] and "Follow up (1)" in d["text"] and d["html"] == d["text"] and d["alert"] == ""
+    spend = {"month_spent": 9.0, "monthly_cap": 10, "warn": True, "blocked": False, "blocked_reason": None}
+    both = PL.format_digest([], date(2026, 10, 11), spend, [followup(1)])
+    assert both["text"].startswith("⏰ Follow up (1):") and both["text"].endswith(both["alert"]) and both["alert"]
+
+
+def test_followups_come_after_the_matches_and_before_the_spend_footer():
+    spend = {"month_spent": 1.0, "monthly_cap": 10, "warn": False, "blocked": False, "blocked_reason": None}
+    t = PL.format_digest([row(1)], date(2026, 10, 11), spend, [followup(1)])["text"]
+    assert t.index("1 new match") < t.index("Follow up (1)") < t.index("Claude spend this month")
+
+
+def test_followups_leave_room_in_a_long_digest():
+    rows = [row(i, strengths=["x" * 150], gaps=["y" * 150]) for i in range(1, 60)]
+    d = PL.format_digest(rows, date(2026, 10, 11), None, [followup(i, title="t" * 120) for i in range(30)])
+    assert len(d["text"]) <= 4096 and "Follow up (30)" in d["text"] and "more (run /status)" in d["text"]
+
+
+def test_followups_are_html_escaped_with_the_rest():
+    d = PL.format_digest([], date(2026, 10, 11), None, [followup(1, title="A <b> & B")])
+    assert "A &lt;b&gt; &amp; B" in d["html"] and "<b>" not in d["html"]
+
+
+def test_digest_asks_the_store_for_the_reminders():
+    class Store(FakeStore):
+        def follow_ups_for_digest(self):
+            return [followup(1)]
+        def budget_status(self):
+            return {"month_spent": 0, "monthly_cap": 10, "warn": False, "blocked": False, "blocked_reason": None}
+    assert "Follow up (1)" in PL.digest(Store(), 10, date(2026, 10, 11))["text"]
+
+
 def test_a_quiet_healthy_day_sends_nothing():
     spend = {"month_spent": 0.4, "monthly_cap": 10, "warn": False, "blocked": False, "blocked_reason": None}
     assert PL.format_digest([], date(2026, 10, 11), spend)["text"] == ""
@@ -575,3 +656,69 @@ def test_board_batch_larger_than_the_set_returns_each_request_once():
     store = RecordingStore(BOARD_PLAN_SETTINGS)
     out = PL.plan(store, batch=1, board_batch=500)
     assert len(_board_labels(out)) == 6 and len(set(_board_labels(out))) == 6
+
+
+# ---- PgStore.follow_ups_for_digest, against a fake connection
+import contextlib
+import psycopg
+import db as DB
+
+
+class _Cur:
+    def __init__(self, script):
+        self.script, self.executed = script, []
+
+    def execute(self, sql, params=None):
+        self.executed.append(sql)
+        step = self.script[len(self.executed) - 1]
+        if isinstance(step, Exception):
+            raise step
+        self._rows = step
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return self._rows
+
+
+def _store(*script):
+    cur = _Cur(script)
+    store = DB.PgStore("host=none")
+
+    @contextlib.contextmanager
+    def cursor():
+        yield cur
+    store.cursor = cursor
+    return store, cur
+
+
+def test_the_digest_reminders_are_empty_and_cost_one_query_when_switched_off():
+    store, cur = _store([{"digest": False}])
+    assert store.follow_ups_for_digest() == [] and len(cur.executed) == 1 and "follow_up_settings" in cur.executed[0]
+
+
+def test_the_digest_reminders_are_empty_when_the_setting_row_is_missing():
+    store, cur = _store([])
+    assert store.follow_ups_for_digest() == [] and len(cur.executed) == 1
+
+
+def test_the_digest_reminders_are_read_when_switched_on():
+    rows = [{"title": "Backend", "company": "Acme", "reason": "waiting", "total": 1, "today": date(2026, 10, 12)}]
+    store, cur = _store([{"digest": True}], rows)
+    assert store.follow_ups_for_digest() == rows
+    assert "follow_ups_due()" in cur.executed[1] and "LIMIT 50" in cur.executed[1] and "count(*) OVER ()" in cur.executed[1]
+
+
+def test_a_database_without_migration_019_means_no_reminders_and_the_digest_still_goes_out():
+    for error in (psycopg.errors.UndefinedTable("no table"), psycopg.errors.UndefinedFunction("no function")):
+        store, _ = _store(error)
+        assert store.follow_ups_for_digest() == []
+    store, _ = _store([{"digest": True}], psycopg.errors.UndefinedFunction("no follow_ups_due"))
+    assert store.follow_ups_for_digest() == []
+
+
+def test_any_other_database_error_is_not_hidden():
+    store, _ = _store(psycopg.errors.OperationalError("connection lost"))
+    with pytest.raises(psycopg.errors.OperationalError):
+        store.follow_ups_for_digest()

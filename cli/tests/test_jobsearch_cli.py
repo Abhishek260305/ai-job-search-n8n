@@ -2486,3 +2486,107 @@ def test_a_failed_remote_write_is_a_clean_error(monkeypatch):
 def test_a_local_stack_refuses_to_push():
     with pytest.raises(C.StackError, match="runs on this machine"):
         C.Stack(env={}).put_config_file("profile.json", "{}")
+
+
+# ================================================================== follow-ups (dashboard version 3b)
+
+class FollowUpStack(FakeStack):
+    def __init__(self, settings=None, due=None, missing=False, **over):
+        super().__init__(**over)
+        self.fu_settings = settings if settings is not None else [{"days": 7, "digest": False}]
+        self.due = due if due is not None else []
+        self.missing = missing
+
+    def psql(self, sql, db="jobsearch"):
+        if "follow_up_settings" in sql:
+            self.sql_log.append(sql)
+            if self.missing:
+                raise C.StackError('relation "follow_up_settings" does not exist')
+            return ""
+        return super().psql(sql, db)
+
+    def query_json(self, sql, db="jobsearch"):
+        if "from follow_up_settings" in sql:
+            self.sql_log.append(sql)
+            if self.missing:
+                raise C.StackError('relation "follow_up_settings" does not exist')
+            return self.fu_settings
+        if "follow_ups_due()" in sql:
+            self.sql_log.append(sql)
+            return self.due
+        return super().query_json(sql, db)
+
+
+def test_follow_up_sql_checks_its_values():
+    assert C.follow_up_sql(10, None) == "UPDATE follow_up_settings SET days = 10, updated_at = now() WHERE id = 1;"
+    assert C.follow_up_sql(None, True) == "UPDATE follow_up_settings SET digest = true, updated_at = now() WHERE id = 1;"
+    assert "days = 3, digest = false" in C.follow_up_sql(3, False)
+    for bad in (0, 91, -1, True, "7", 7.5):
+        with pytest.raises(ValueError):
+            C.follow_up_sql(bad, None)
+    with pytest.raises(ValueError):
+        C.follow_up_sql(None, "on")
+    with pytest.raises(ValueError):
+        C.follow_up_sql(None, None)
+
+
+def test_follow_up_with_nothing_due_says_so_and_shows_the_settings():
+    out = C.run_follow_up(FollowUpStack())
+    assert "after 7 days" in out and "does not list what is due" in out and "Nothing is due for a follow-up today." in out
+    assert "scripts/jobsearch follow-up --days N | --digest on|off" in out
+
+
+def test_follow_up_lists_what_is_due_with_the_reason():
+    due = [{"id": 5, "title": "Data Engineer", "company": "Beta", "reason": "date", "follow_up_on": "2026-10-10", "days_waiting": None, "contact_name": "Priya N"},
+           {"id": 9, "title": "Backend", "company": "Acme", "reason": "waiting", "follow_up_on": None, "days_waiting": 1, "contact_name": None}]
+    out = C.run_follow_up(FollowUpStack(due=due, settings=[{"days": 1, "digest": True}]))
+    assert "after 1 day " in out and "lists what is due" in out and "2 due:" in out
+    assert "#5     Data Engineer @ Beta: follow-up date 2026-10-10  (Priya N)" in out
+    assert "#9     Backend @ Acme: applied 1 day ago, no reply" in out
+
+
+def test_follow_up_changes_the_settings_and_then_shows_them():
+    stack = FollowUpStack()
+    out = C.run_follow_up(stack, days=14, digest=True)
+    assert out.startswith("saved.") and any("UPDATE follow_up_settings SET days = 14, digest = true" in q for q in stack.sql_log)
+
+
+def test_follow_up_refuses_a_bad_value_before_any_sql():
+    stack = FollowUpStack()
+    with pytest.raises(ValueError):
+        C.run_follow_up(stack, days=0)
+    assert not any("UPDATE" in q for q in stack.sql_log)
+
+
+def test_follow_up_before_migration_019_says_what_to_do():
+    out = C.run_follow_up(FollowUpStack(missing=True))
+    assert "migration 019" in out and "scripts/jobsearch migrate" in out
+
+
+def test_follow_up_says_nothing_was_changed_when_it_could_not_save():
+    out = C.run_follow_up(FollowUpStack(missing=True), days=10)
+    assert "migration 019" in out and "nothing was changed" in out
+
+
+def test_follow_up_does_not_blame_the_migration_for_another_missing_thing():
+    class NoDb(FollowUpStack):
+        def query_json(self, sql, db="jobsearch"):
+            raise C.StackError('database "jobsearch" does not exist')
+    with pytest.raises(C.StackError):
+        C.run_follow_up(NoDb())
+
+
+def test_follow_up_is_a_command(tmp_path, capsys):
+    stack = FollowUpStack()
+    import unittest.mock as mock
+    with mock.patch.object(C, "Stack", return_value=stack):
+        assert C.main(["follow-up"]) == 0
+        assert "Nothing is due" in capsys.readouterr().out
+        assert C.main(["follow-up", "--days", "10", "--digest", "off"]) == 0
+        assert any("days = 10, digest = false" in q for q in stack.sql_log)
+        with pytest.raises(SystemExit):
+            C.main(["follow-up", "--digest", "maybe"])
+
+
+def test_the_module_docstring_lists_follow_up():
+    assert "follow-up [--days N] [--digest on|off]" in C.__doc__

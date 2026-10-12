@@ -19,7 +19,7 @@ flowchart TB
     n8n -->|HTTP| svc
     cli -->|docker compose exec| svc
     browser -->|127.0.0.1:8080| dash
-    dash -->|views + 6 functions| pg
+    dash -->|views + 14 functions| pg
     dash -->|settings and search profile| svc
     dash -.->|reads PDFs| out
     svc --> pg
@@ -101,8 +101,11 @@ Defined in [`postgres/schema.sql`](../postgres/schema.sql) and the numbered file
 | `v_shortlist`, `v_review_queue`, `v_spend_month` | the views behind `status`, `review` and `budget` |
 | `v_dashboard_jobs`, `v_dashboard_job_detail`, `v_dashboard_job_sources` | the dashboard's read-only views of jobs, one job's details and its listings (migration 014) |
 | `dashboard_summary()`, `dashboard_set_status()`, `dashboard_application_file()` | the dashboard's other database access (migration 014): the card and chart counts, a status change that refuses if the job changed since the page loaded (then calls `set_application_status()`), and the path of a generated PDF |
+| `dashboard_move_status()`, `dashboard_undo_status()` | migration 020: the status change that also names the history entry it wrote, and the undo that takes back the newest history entry of a job when it was made on the dashboard and the job has not moved since (the status, applied date and note go back as they were, and the entry is removed). The entries carry their starting point for this |
+| `dashboard_job_events()`, `dashboard_board()`, `dashboard_stats()` | migration 018: the timeline of one job, the Kanban board's cards and totals, and the response rate and weekly numbers. The history itself is the table `application_events`, written by a trigger on `applications` (the role cannot read it) |
+| `dashboard_job_tracking()`, `dashboard_set_tracking()`, `dashboard_set_follow_up_days()` | migration 019: your notes, contact, referral and follow-up date for a job (saved only if the row is as you last read it), and the days setting. The data is in `job_tracking` and `follow_up_settings`; `follow_ups_due()` is the rule for what is due (also used by the scraper's digest and `jobsearch follow-up`). The role cannot read these tables |
 | `dashboard_health()`, `dashboard_spend()`, `dashboard_set_pause()` | migration 016: the Health page's checks and alerts, the Spend page's meters and per-day figures, and the pause switch (the dashboard's only write besides a status; the same switch as `schedule pause`) |
-| `jobsearch_dashboard` (role) | the dashboard's login: `SELECT` on the three views and `EXECUTE` on the six functions, nothing else. Created `NOLOGIN` by migration 014; the `dashboard-db-init` service gives it a password from `.env` |
+| `jobsearch_dashboard` (role) | the dashboard's login: `SELECT` on the three views and `EXECUTE` on the fourteen functions, nothing else. Created `NOLOGIN` by migration 014; the `dashboard-db-init` service gives it a password from `.env` |
 
 Business rules are SQL functions where atomicity matters (`upsert_job`, `claim_jobs_to_score`, `record_score`, `claim_jobs_to_tailor`, `save_application`, `review_application`, `record_usage`) so concurrent workflow runs cannot double-process a job. The dashboard's functions are `SECURITY DEFINER`, so its role never needs privileges on the tables themselves.
 

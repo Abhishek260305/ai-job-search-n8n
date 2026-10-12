@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import type { Health, JobDetail, JobPage, JobRow, SearchPage, SettingsPage, Spend, Summary } from '@/api/types'
+import type { Board, Health, JobDetail, JobPage, JobRow, SearchPage, SettingsPage, Spend, Stats, Summary, JobEvent, Tracking } from '@/api/types'
 
 export const ME = { authenticated: true, expires_at: '2026-10-19T09:30:00Z' }
 
@@ -126,6 +126,54 @@ export const SEARCH: SearchPage = {
   },
 }
 
+export function boardCard(id: number, overrides: Partial<Board['columns'][number]['items'][number]> = {}): Board['columns'][number]['items'][number] {
+  return {
+    id, title: `Engineer ${id}`, company: `Company ${id}`, location: 'Pune', is_remote: false, score: 80, pipeline_status: 'shortlisted',
+    applied_at: null, deadline: null, closing_soon: false, has_resume: false, has_cover_letter: false, needs_attention: false,
+    follow_up: null, status_since: '2026-10-10T10:00:00Z', ...overrides,
+  }
+}
+
+export const BOARD: Board = {
+  generated_at: '2026-10-12T09:30:00Z',
+  columns: [
+    { key: 'not_applied', total: 43, items: [boardCard(1), boardCard(2, { pipeline_status: 'drafted', has_resume: true, score: 75 })] },
+    { key: 'applied', total: 1, items: [boardCard(3, { pipeline_status: 'applied', applied_at: '2026-10-08T09:00:00Z', status_since: '2026-10-08T09:00:00Z' })] },
+    { key: 'in_progress', total: 0, items: [] },
+    { key: 'interview', total: 1, items: [boardCard(4, { pipeline_status: 'interview', status_since: '2026-10-11T09:00:00Z' })] },
+    { key: 'offer', total: 0, items: [] },
+    { key: 'rejected', total: 0, items: [] },
+  ],
+  today: '2026-10-12',
+  follow_up_days: 7,
+  follow_ups_total: 2,
+  follow_ups: [
+    { id: 3, title: 'Engineer 3', company: 'Company 3', location: 'Pune', score: 80, pipeline_status: 'applied', reason: 'waiting', follow_up_on: null,
+      applied_on: '2026-10-01', days_waiting: 11, contact_name: 'Priya N', contact_email: 'priya@example.com', referral: null },
+    { id: 4, title: 'Engineer 4', company: 'Company 4', location: 'Pune', score: 80, pipeline_status: 'interview', reason: 'date', follow_up_on: '2026-10-10',
+      applied_on: null, days_waiting: null, contact_name: null, contact_email: null, referral: 'Sam' },
+  ],
+  closed: { withdrawn: 2, skipped: 1 },
+}
+
+export const TRACKING: Tracking = {
+  notes: 'call Priya on Friday', contact_name: 'Priya N', contact_email: 'priya@example.com', referral: 'via Sam',
+  follow_up_on: '2026-10-16', version: '2026-10-12T09:30:00.123456Z', today: '2026-10-12',
+}
+
+export const NO_TRACKING: Tracking = { notes: null, contact_name: null, contact_email: null, referral: null, follow_up_on: null, version: null, today: '2026-10-12' }
+
+export const STATS: Stats = {
+  generated_at: '2026-10-12T09:30:00Z', timezone: 'Asia/Kolkata', applied: 8, responded: 3, reached_interview: 2, reached_offer: 1,
+  avg_days_to_reply: 6.5, replies_measured: 2,
+  weekly: Array.from({ length: 12 }, (_, i) => ({ week_start: `2026-08-${String(10 + i).padStart(2, '0')}`, found: 20 + i, shortlisted: 3, applied: i === 11 ? 2 : 0 })),
+}
+
+export const EVENTS: JobEvent[] = [
+  { id: 1, from_status: null, to_status: 'drafted', note: null, source: null, at: '2026-10-09T09:00:00Z', undoable: false },
+  { id: 2, from_status: 'drafted', to_status: 'applied', note: 'sent my CV', source: 'dashboard', at: '2026-10-10T09:00:00Z', undoable: true },
+]
+
 /** A row shaped like the API's JobRow. */
 export function jobRow(id: number, overrides: Partial<JobRow> = {}): JobRow {
   return {
@@ -169,6 +217,10 @@ export const server = setupServer(
   http.get('/api/settings', () => HttpResponse.json(SETTINGS)),
   http.get('/api/search', () => HttpResponse.json(SEARCH)),
   http.get('/api/jobs', () => HttpResponse.json(jobPage([jobRow(1), jobRow(2)]))),
+  http.get('/api/board', () => HttpResponse.json(BOARD)),
+  http.get('/api/stats', () => HttpResponse.json(STATS)),
+  http.get('/api/jobs/:id/events', () => HttpResponse.json(EVENTS)),
+  http.get('/api/jobs/:id/tracking', () => HttpResponse.json(NO_TRACKING)),
   http.get('/api/jobs/:id', ({ params }) => HttpResponse.json(jobDetail(Number(params.id)))),
 )
 

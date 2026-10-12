@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { toast } from 'sonner'
 import { api, ApiError, toQuery } from '@/api/client'
 import type {
-  BudgetChange, EditableStatus, FeaturesChange, Health, JobDetail, JobPage, JobsParams, Me, PauseState, PipelineStatus, RunRequested,
+  Board, UndoResult, BudgetChange, JobEvent, Stats, Tracking, EditableStatus, FeaturesChange, Health, JobDetail, JobPage, JobsParams, Me, PauseState, PipelineStatus, RunRequested,
   FindResult, ScheduleChange, ScheduleName, SearchPage, SearchProfileIn, SettingsPage, Spend, StatusResult, Summary, TailoringChange,
 } from '@/api/types'
 import { statusLabel } from '@/lib/status'
@@ -17,6 +17,10 @@ export const keys = {
   spend: ['spend'] as const,
   settings: ['settings'] as const,
   search: ['search'] as const,
+  board: ['board'] as const,
+  stats: ['stats'] as const,
+  events: (id: number) => ['events', id] as const,
+  tracking: (id: number) => ['tracking', id] as const,
 }
 
 export function useMe() {
@@ -48,16 +52,142 @@ export function useJob(id: number | null) {
   })
 }
 
+/** The Kanban board. A move changes it, so it reloads after one (see useSetStatus) and every 5 minutes. */
+export function useBoard() {
+  return useQuery({ queryKey: keys.board, queryFn: () => api<Board>('/api/board'), refetchInterval: 5 * 60_000 })
+}
+
+export function useStats() {
+  return useQuery({ queryKey: keys.stats, queryFn: () => api<Stats>('/api/stats'), refetchInterval: 5 * 60_000 })
+}
+
+/** One job's timeline: every status change, oldest first. */
+export function useJobEvents(id: number | null) {
+  return useQuery({
+    queryKey: keys.events(id ?? 0),
+    queryFn: () => api<JobEvent[]>(`/api/jobs/${id}/events`),
+    enabled: id !== null,
+  })
+}
+
+/**
+ * Notes, contact, referral and follow-up date of one job. Edited as a draft on screen, so it is never refetched behind the
+ * user's back (coming back to the tab would bring a new version and replace what is being typed): a change made elsewhere
+ * shows up as a conflict when saving, which says so and offers a reload.
+ */
+export function useTracking(id: number | null) {
+  return useQuery({
+    queryKey: keys.tracking(id ?? 0),
+    queryFn: () => api<Tracking>(`/api/jobs/${id}/tracking`),
+    enabled: id !== null,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  })
+}
+
+export type TrackingChanges = Partial<Pick<Tracking, 'notes' | 'contact_name' | 'contact_email' | 'referral' | 'follow_up_on'>>
+
+/** A save. A refusal (a bad email, a change made elsewhere) is left on the mutation for the form to show next to its fields. */
+export function useSaveTracking(id: number) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ version, changes }: { version: string | null; changes: TrackingChanges }) =>
+      api<Tracking>(`/api/jobs/${id}/tracking`, { method: 'PUT', json: { version, ...changes } }),
+    onSuccess: (saved) => {
+      client.setQueryData(keys.tracking(id), saved)
+      void client.invalidateQueries({ queryKey: keys.board })      // a follow-up date decides what is due
+      toast.success('Saved')
+    },
+  })
+}
+
+/** Moves one job's follow-up date (the board's "Snooze" and "Followed up"): reads the latest version first, then saves. */
+export function useSetFollowUpDate() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, date }: { id: number; date: string }) => {
+      const current = await api<Tracking>(`/api/jobs/${id}/tracking`)
+      return api<Tracking>(`/api/jobs/${id}/tracking`, { method: 'PUT', json: { version: current.version, follow_up_on: date } })
+    },
+    onSuccess: (saved, { id }) => {
+      client.setQueryData(keys.tracking(id), saved)
+      void client.invalidateQueries({ queryKey: keys.board })
+    },
+    onError: (error) => {
+      if (!(error instanceof ApiError && error.status === 401)) {
+        toast.error(error instanceof ApiError ? error.detail : 'The reminder could not be changed.')
+      }
+    },
+  })
+}
+
+export function useSetFollowUpDays() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (days: number) => api<{ days: number }>('/api/follow-ups/days', { method: 'PUT', json: { days } }),
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: keys.board })
+      toast.success('Saved')
+    },
+    onError: (error) => {
+      if (!(error instanceof ApiError && error.status === 401)) {
+        toast.error(error instanceof ApiError ? error.detail : 'The setting could not be saved.')
+      }
+    },
+  })
+}
+
 export type SetStatusInput = { id: number; status: EditableStatus; expected: PipelineStatus; note?: string }
 
-export function useSetStatus() {
+/** How long the "Undo" on a move stays on screen (milliseconds). */
+export const UNDO_WINDOW_MS = 30_000
+
+/**
+ * Takes back the newest change of a job (`expected` is the status that change set). Only a change made on the dashboard, and
+ * only while the job is still as that change left it: otherwise the server says so (409) and the page reloads.
+ */
+function useUndo() {
   const client = useQueryClient()
-  const refresh = (id: number) =>
+  const refreshAll = (id: number) =>
     Promise.all([
       client.invalidateQueries({ queryKey: keys.summary }),
       client.invalidateQueries({ queryKey: keys.allJobs }),
       client.invalidateQueries({ queryKey: keys.job(id) }),
+      client.invalidateQueries({ queryKey: keys.events(id) }),
+      client.invalidateQueries({ queryKey: keys.board }),
+      client.invalidateQueries({ queryKey: keys.stats }),
     ])
+  return {
+    refreshAll,
+    undo: useMutation({
+      mutationFn: ({ id, expected, eventId }: { id: number; expected: PipelineStatus; eventId?: number }) =>
+        api<UndoResult>(`/api/jobs/${id}/undo`, {
+          method: 'POST',
+          json: { expected_status: expected, ...(eventId !== undefined ? { event_id: eventId } : {}) },
+        }),
+      onSuccess: async (result, { id }) => {
+        await refreshAll(id)
+        toast.success(`Undone: back to ${statusLabel(result.status)}`)
+      },
+      onError: async (error, { id }) => {
+        if (error instanceof ApiError && error.status === 409) {
+          await refreshAll(id)
+          toast.warning(error.detail)
+        } else if (!(error instanceof ApiError && error.status === 401)) {
+          toast.error(error instanceof ApiError ? error.detail : 'The change could not be undone.')
+        }
+      },
+    }),
+  }
+}
+
+/** The undo of one history entry (the timeline's button). */
+export function useUndoEntry() {
+  return useUndo().undo
+}
+
+export function useSetStatus() {
+  const { refreshAll: refresh, undo } = useUndo()
   return useMutation({
     mutationFn: ({ id, status, expected, note }: SetStatusInput) =>
       api<StatusResult>(`/api/jobs/${id}/status`, {
@@ -65,9 +195,29 @@ export function useSetStatus() {
         json: { status, expected_status: expected, ...(note?.trim() ? { note: note.trim() } : {}) },
       }),
     // the mutation stays pending until the refetch is done, so the old label never shows as if saved
-    onSuccess: async (_result, { id, status }) => {
+    onSuccess: async (result, { id, status }) => {
       await refresh(id)
-      toast.success(`Marked ${statusLabel(status)}`)
+      const message = `Marked ${statusLabel(status)}`
+      if (result.event_id == null) {
+        toast.success(message)                    // nothing was recorded (the same status again): there is nothing to take back
+        return
+      }
+      // A move can be taken back for a while. The Undo is tied to the history entry this move wrote, so it can never
+      // reach an older move; one press only: the message goes away at once.
+      const entry = result.event_id
+      let pressed = false                          // the message animates away, so it can still be clicked for a moment
+      const toastId = toast.success(message, {
+        duration: UNDO_WINDOW_MS,
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            if (pressed) return
+            pressed = true
+            toast.dismiss(toastId)
+            undo.mutate({ id, expected: status, eventId: entry })
+          },
+        },
+      })
     },
     onError: async (error, { id }) => {
       if (error instanceof ApiError && error.status === 409) {

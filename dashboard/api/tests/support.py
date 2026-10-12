@@ -100,6 +100,53 @@ SPEND = {
 }
 
 
+EVENTS = [
+    {"id": 1, "from_status": None, "to_status": "drafted", "note": None, "source": None, "at": NOW, "undoable": False},
+    {"id": 2, "from_status": "drafted", "to_status": "applied", "note": "sent my CV", "source": "dashboard", "at": NOW, "undoable": True},
+]
+
+
+def board_card(job_id: int = 1, **overrides) -> dict:
+    row = {"id": job_id, "title": f"Engineer {job_id}", "company": f"Company {job_id}", "location": "Pune", "is_remote": False,
+           "score": 80, "pipeline_status": "shortlisted", "applied_at": None, "deadline": None, "closing_soon": False,
+           "has_resume": False, "has_cover_letter": False, "needs_attention": False, "follow_up": None,
+           "status_since": NOW}
+    row.update(overrides)
+    return row
+
+
+BOARD = {
+    "generated_at": NOW,
+    "columns": [
+        {"key": "not_applied", "total": 51, "items": [board_card(1), board_card(2, pipeline_status="drafted", has_resume=True)]},
+        {"key": "applied", "total": 1, "items": [board_card(3, pipeline_status="applied", applied_at=NOW)]},
+        {"key": "in_progress", "total": 0, "items": []},
+        {"key": "interview", "total": 0, "items": []},
+        {"key": "offer", "total": 0, "items": []},
+        {"key": "rejected", "total": 0, "items": []},
+    ],
+    "today": "2026-10-12",
+    "follow_up_days": 7,
+    "follow_ups_total": 3,
+    "follow_ups": [
+        {"id": 3, "title": "Engineer 3", "company": "Company 3", "location": "Pune", "score": 80, "pipeline_status": "applied",
+         "reason": "waiting", "follow_up_on": None, "applied_on": "2026-10-01", "days_waiting": 11,
+         "contact_name": "Priya N", "contact_email": "priya@example.com", "referral": None},
+    ],
+    "closed": {"withdrawn": 2, "skipped": 1},
+}
+
+TRACKING = {"notes": "call Priya on Friday", "contact_name": "Priya N", "contact_email": "priya@example.com",
+            "referral": "via Sam", "follow_up_on": "2026-10-16", "version": "2026-10-12T09:30:00.123456Z",
+            "today": "2026-10-12"}
+
+STATS = {
+    "generated_at": NOW, "timezone": "Asia/Kolkata", "applied": 8, "responded": 3, "reached_interview": 2, "reached_offer": 1,
+    "avg_days_to_reply": 6.5, "replies_measured": 2,
+    "weekly": [{"week_start": f"2026-08-{day:02d}", "found": 10 + day, "shortlisted": 3, "applied": 1} for day in range(10, 22)],
+}
+
+
 class FakeStore:
     """Answers like PgStore from fixed data. Set `fail` to an exception to make the next data call raise it;
     every call is recorded in `calls`."""
@@ -110,6 +157,7 @@ class FakeStore:
         self.files: dict[tuple[int, str], str | None] = {}
         self.calls: list[tuple] = []
         self.fail: Exception | None = None
+        self.event_id: int | None = 42
 
     def _call(self, *call):
         self.calls.append(call)
@@ -133,9 +181,9 @@ class FakeStore:
             raise NotFound(f"no job {job_id}")
         return self.details[job_id]
 
-    def set_status(self, job_id, status, expected, note):
-        self._call("set_status", job_id, status, expected, note)
-        return status
+    def move_status(self, job_id, status, expected, note):
+        self._call("move_status", job_id, status, expected, note)
+        return {"status": status, "event_id": self.event_id}
 
     def application_file(self, job_id, kind):
         self._call("application_file", job_id, kind)
@@ -152,6 +200,42 @@ class FakeStore:
     def spend(self) -> dict:
         self._call("spend")
         return SPEND
+
+    def job_events(self, job_id):
+        self._call("job_events", job_id)
+        if job_id not in self.details:
+            raise NotFound(f"no job {job_id}")
+        return EVENTS
+
+    def job_tracking(self, job_id):
+        self._call("job_tracking", job_id)
+        if job_id not in self.details:
+            raise NotFound(f"no job {job_id}")
+        return TRACKING
+
+    def set_tracking(self, job_id, version, patch):
+        self._call("set_tracking", job_id, version, patch)
+        if job_id not in self.details:
+            raise NotFound(f"no job {job_id}")
+        return TRACKING | patch | {"version": "2026-10-12T09:31:00.000001Z"}
+
+    def set_follow_up_days(self, days):
+        self._call("set_follow_up_days", days)
+        return days
+
+    def undo_status(self, job_id, expected, event_id):
+        self._call("undo_status", job_id, expected, event_id)
+        if job_id not in self.details:
+            raise NotFound(f"no job {job_id}")
+        return {"id": job_id, "status": "shortlisted"}
+
+    def board(self) -> dict:
+        self._call("board")
+        return BOARD
+
+    def stats(self) -> dict:
+        self._call("stats")
+        return STATS
 
     def set_pause(self, paused, reason):
         self._call("set_pause", paused, reason)

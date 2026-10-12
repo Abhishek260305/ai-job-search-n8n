@@ -140,6 +140,58 @@ export interface paths {
         patch: operations["set_status_api_jobs__job_id__status_patch"];
         trace?: never;
     };
+    "/api/jobs/{job_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job Events */
+        get: operations["job_events_api_jobs__job_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Undo Status */
+        post: operations["undo_status_api_jobs__job_id__undo_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/tracking": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job Tracking */
+        get: operations["job_tracking_api_jobs__job_id__tracking_get"];
+        /** Save Tracking */
+        put: operations["save_tracking_api_jobs__job_id__tracking_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/files/{kind}": {
         parameters: {
             query?: never;
@@ -166,6 +218,57 @@ export interface paths {
         };
         /** Export Csv */
         get: operations["export_csv_api_export_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/board": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Board */
+        get: operations["board_api_board_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/follow-ups/days": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Follow Up Days */
+        put: operations["follow_up_days_api_follow_ups_days_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Stats */
+        get: operations["stats_api_stats_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -417,6 +520,86 @@ export interface components {
             /** Blocked Reason */
             blocked_reason: string | null;
         };
+        /** Board */
+        Board: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Columns */
+            columns: components["schemas"]["BoardColumn"][];
+            /**
+             * Today
+             * Format: date
+             */
+            today: string;
+            /** Follow Up Days */
+            follow_up_days: number;
+            /** Follow Ups Total */
+            follow_ups_total: number;
+            /** Follow Ups */
+            follow_ups: components["schemas"]["FollowUp"][];
+            closed: components["schemas"]["BoardClosed"];
+        };
+        /** BoardCard */
+        BoardCard: {
+            /** Id */
+            id: number;
+            /** Title */
+            title: string;
+            /** Company */
+            company: string | null;
+            /** Location */
+            location: string | null;
+            /** Is Remote */
+            is_remote: boolean | null;
+            /** Score */
+            score: number | null;
+            /**
+             * Pipeline Status
+             * @enum {string}
+             */
+            pipeline_status: "new" | "filtered_out" | "scam_blocked" | "scored" | "shortlisted" | "tailored" | "drafted" | "approved" | "applied" | "in_progress" | "interview" | "offer" | "rejected" | "withdrawn" | "skipped" | "expired";
+            /** Applied At */
+            applied_at: string | null;
+            /** Deadline */
+            deadline: string | null;
+            /** Closing Soon */
+            closing_soon: boolean;
+            /** Has Resume */
+            has_resume: boolean;
+            /** Has Cover Letter */
+            has_cover_letter: boolean;
+            /** Needs Attention */
+            needs_attention: boolean;
+            /** Follow Up */
+            follow_up: ("date" | "waiting") | null;
+            /**
+             * Status Since
+             * Format: date-time
+             */
+            status_since: string;
+        };
+        /** BoardClosed */
+        BoardClosed: {
+            /** Withdrawn */
+            withdrawn: number;
+            /** Skipped */
+            skipped: number;
+        };
+        /** BoardColumn */
+        BoardColumn: {
+            /**
+             * Key
+             * @enum {string}
+             */
+            key: "not_applied" | "applied" | "in_progress" | "interview" | "offer" | "rejected";
+            /** Total */
+            total: number;
+            /** Items */
+            items: components["schemas"]["BoardCard"][];
+        };
         /** BoardEntry */
         BoardEntry: {
             /** Slug */
@@ -606,6 +789,49 @@ export interface components {
             /** Matches */
             matches: components["schemas"]["BoardMatch"][];
         };
+        /**
+         * FollowUp
+         * @description One job that is due for a follow-up today (version 3b).
+         */
+        FollowUp: {
+            /** Id */
+            id: number;
+            /** Title */
+            title: string;
+            /** Company */
+            company: string | null;
+            /** Location */
+            location: string | null;
+            /** Score */
+            score: number | null;
+            /**
+             * Pipeline Status
+             * @enum {string}
+             */
+            pipeline_status: "new" | "filtered_out" | "scam_blocked" | "scored" | "shortlisted" | "tailored" | "drafted" | "approved" | "applied" | "in_progress" | "interview" | "offer" | "rejected" | "withdrawn" | "skipped" | "expired";
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "date" | "waiting";
+            /** Follow Up On */
+            follow_up_on: string | null;
+            /** Applied On */
+            applied_on: string | null;
+            /** Days Waiting */
+            days_waiting: number | null;
+            /** Contact Name */
+            contact_name: string | null;
+            /** Contact Email */
+            contact_email: string | null;
+            /** Referral */
+            referral: string | null;
+        };
+        /** FollowUpDays */
+        FollowUpDays: {
+            /** Days */
+            days: number;
+        };
         /** FunnelStep */
         FunnelStep: {
             /** Step */
@@ -746,6 +972,29 @@ export interface components {
             model: string | null;
             /** Sources Detail */
             sources_detail: components["schemas"]["JobSource"][];
+        };
+        /** JobEvent */
+        JobEvent: {
+            /** Id */
+            id: number;
+            /** From Status */
+            from_status: string | null;
+            /** To Status */
+            to_status: string;
+            /** Note */
+            note: string | null;
+            /** Source */
+            source: ("dashboard" | "backfill") | null;
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /**
+             * Undoable
+             * @default false
+             */
+            undoable: boolean;
         };
         /** JobPage */
         JobPage: {
@@ -1177,6 +1426,30 @@ export interface components {
             /** Models */
             models: components["schemas"]["ModelSpend"][];
         };
+        /** Stats */
+        Stats: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Timezone */
+            timezone: string;
+            /** Applied */
+            applied: number;
+            /** Responded */
+            responded: number;
+            /** Reached Interview */
+            reached_interview: number;
+            /** Reached Offer */
+            reached_offer: number;
+            /** Avg Days To Reply */
+            avg_days_to_reply: number | null;
+            /** Replies Measured */
+            replies_measured: number;
+            /** Weekly */
+            weekly: components["schemas"]["WeekStats"][];
+        };
         /** StatusChange */
         StatusChange: {
             /**
@@ -1201,6 +1474,8 @@ export interface components {
              * @enum {string}
              */
             status: "approved" | "skipped" | "applied" | "in_progress" | "interview" | "offer" | "rejected" | "withdrawn";
+            /** Event Id */
+            event_id?: number | null;
         };
         /** Summary */
         Summary: {
@@ -1259,6 +1534,68 @@ export interface components {
             /** Model */
             model: string;
         };
+        /** Tracking */
+        Tracking: {
+            /** Notes */
+            notes: string | null;
+            /** Contact Name */
+            contact_name: string | null;
+            /** Contact Email */
+            contact_email: string | null;
+            /** Referral */
+            referral: string | null;
+            /** Follow Up On */
+            follow_up_on: string | null;
+            /** Version */
+            version: string | null;
+            /**
+             * Today
+             * Format: date
+             */
+            today: string;
+        };
+        /**
+         * TrackingSave
+         * @description Only the fields sent change; null or an empty string clears one. `version` is what the last read said.
+         */
+        TrackingSave: {
+            /** Version */
+            version?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Contact Name */
+            contact_name?: string | null;
+            /** Contact Email */
+            contact_email?: string | null;
+            /** Referral */
+            referral?: string | null;
+            /** Follow Up On */
+            follow_up_on?: string | null;
+        };
+        /**
+         * UndoRequest
+         * @description Take back the newest change of a job. `expected_status` is the status that change set (what the page showed after it);
+         *     `event_id` is given when the user picked an entry in the timeline, and must then still be the newest.
+         */
+        UndoRequest: {
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "new" | "filtered_out" | "scam_blocked" | "scored" | "shortlisted" | "tailored" | "drafted" | "approved" | "applied" | "in_progress" | "interview" | "offer" | "rejected" | "withdrawn" | "skipped" | "expired";
+            /** Event Id */
+            event_id?: number | null;
+        };
+        /** UndoResult */
+        UndoResult: {
+            /** Id */
+            id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "new" | "filtered_out" | "scam_blocked" | "scored" | "shortlisted" | "tailored" | "drafted" | "approved" | "applied" | "in_progress" | "interview" | "offer" | "rejected" | "withdrawn" | "skipped" | "expired";
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1271,6 +1608,20 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** WeekStats */
+        WeekStats: {
+            /**
+             * Week Start
+             * Format: date
+             */
+            week_start: string;
+            /** Found */
+            found: number;
+            /** Shortlisted */
+            shortlisted: number;
+            /** Applied */
+            applied: number;
         };
     };
     responses: never;
@@ -1659,6 +2010,282 @@ export interface operations {
             };
         };
     };
+    job_events_api_jobs__job_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobEvent"][];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    undo_status_api_jobs__job_id__undo_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UndoRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UndoResult"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    job_tracking_api_jobs__job_id__tracking_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tracking"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    save_tracking_api_jobs__job_id__tracking_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrackingSave"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Tracking"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     application_file_api_jobs__job_id__files__kind__get: {
         parameters: {
             query?: never;
@@ -1791,6 +2418,187 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    board_api_board_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Board"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    follow_up_days_api_follow_ups_days_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FollowUpDays"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FollowUpDays"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    stats_api_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Stats"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
                 };
             };
             /** @description Service Unavailable */

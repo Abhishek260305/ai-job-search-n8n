@@ -20,7 +20,7 @@ We build in phases, each one tested and documented before the next starts. ✅ d
 | 6 | Gmail status tracking (optional) | ⬜ planned |
 | 7 | More sources: company job boards (five systems) and remote feeds (five feeds) | ✅ |
 | 8 | Extras (company research, interview prep) | ⬜ optional |
-| 9 | Web dashboard: summary, charts, jobs table, status editing, health, spend, settings and search profile; later Kanban ([dashboard.md](dashboard.md)) | 🟨 versions 1 and 2a to 2c ✅ (optional, deployed 2026-10-12); version 3 planned |
+| 9 | Web dashboard: summary, charts, jobs table, status editing, health, spend, settings and search profile; later Kanban ([dashboard.md](dashboard.md)) | 🟨 versions 1 and 2a to 2c ✅ (optional, deployed 2026-10-12); 3a (history, board, numbers) built, tested and deployed; 3b (notes, contacts, follow-ups) built and tested; 3c planned |
 
 ### Known limits (read these)
 
@@ -171,7 +171,10 @@ A React + Vite + TypeScript app with a Python (FastAPI) API in its own opt-in co
 - ✅ **Version 2b (built, tested and deployed 2026-10-12):** settings page: optional parts, schedules (with run now), tailoring and spending caps (lower only), all through the scraper's own validated endpoints. No migration; the scraper reports `board_batch`
 - ✅ **Version 2c (built, tested and deployed 2026-10-12):** the Search page: search profile, sources and company boards, with "find a company". The database is the source of truth once the dashboard edits it; the CLI refuses to overwrite a dashboard edit until `search-profile pull`. Migration 017
 - ⬜ **Requeue button** for parked jobs
-- ⬜ **Version 3:** status history (`application_events`), Kanban board, notes and contacts, follow-up reminders, on-demand tailoring button, weekly stats
+- ✅ **Version 3a** (built and tested; install: [dashboard.md](dashboard.md#adding-version-3a-to-an-existing-install)): status history (`application_events`), Kanban board, the numbers (response rate, days to a first reply, weekly)
+- ✅ **Undo** (built and tested, migration 020): take back a mistaken move so the history and the numbers never see it ([dashboard.md](dashboard.md#undo))
+- ✅ **Version 3b** (built and tested; install: [dashboard.md](dashboard.md#adding-version-3b-to-an-existing-install)): notes, contacts and referral on any job, a follow-up date, the Follow up list and card badges, an optional section in the Telegram digest, `scripts/jobsearch follow-up`
+- ⬜ **Version 3c:** on-demand tailoring button
 - ⬜ **Later:** Gmail suggestions inbox (with Phase 6), match feedback, saved filters (phone access through Tailscale and the phone layout are done)
 
 ## Principles

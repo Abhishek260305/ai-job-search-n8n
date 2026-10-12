@@ -1,7 +1,7 @@
 import { useIsFetching, useQueryClient } from '@tanstack/react-query'
 import { Download, LogOut, RefreshCw } from 'lucide-react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { keys, useLogout, usePipeline, useSpend, useSummary } from '@/api/hooks'
+import { keys, useBoard, useLogout, usePipeline, useSpend, useSummary } from '@/api/hooks'
 import ThemeToggle from '@/components/ThemeToggle'
 import { Button } from '@/components/ui/button'
 import { formatDateTime, formatRelative } from '@/lib/format'
@@ -21,10 +21,11 @@ function Updated({ at }: { at: string }) {
   )
 }
 
-export type Page = 'overview' | 'health' | 'spend' | 'settings' | 'search'
+export type Page = 'overview' | 'board' | 'health' | 'spend' | 'settings' | 'search'
 
 const PAGES: readonly { to: string; label: string; page: Page }[] = [
   { to: '/', label: 'Jobs', page: 'overview' },
+  { to: '/board', label: 'Board', page: 'board' },
   { to: '/health', label: 'Health', page: 'health' },
   { to: '/spend', label: 'Spend', page: 'spend' },
   { to: '/search', label: 'Search', page: 'search' },
@@ -40,6 +41,10 @@ function HealthUpdated() {
   const health = usePipeline()
   return health.data ? <Updated at={health.data.generated_at} /> : null
 }
+function BoardUpdated() {
+  const board = useBoard()
+  return board.data ? <Updated at={board.data.generated_at} /> : null
+}
 function SpendUpdated() {
   const spend = useSpend()
   return spend.data ? <Updated at={spend.data.generated_at} /> : null
@@ -50,7 +55,7 @@ export default function AppHeader({ page = 'overview' }: { page?: Page }) {
   const { view } = useJobsParams()
   const logout = useLogout()
   const navigate = useNavigate()
-  const queryKeys = page === 'overview' ? [keys.summary, keys.allJobs] : [page === 'health' ? keys.pipeline : page === 'spend' ? keys.spend : page === 'search' ? keys.search : keys.settings]
+  const queryKeys = page === 'overview' ? [keys.summary, keys.allJobs] : page === 'board' ? [keys.board, keys.stats] : [page === 'health' ? keys.pipeline : page === 'spend' ? keys.spend : page === 'search' ? keys.search : keys.settings]
   const fetching = useIsFetching({ predicate: (q) => queryKeys.some((k) => k[0] === q.queryKey[0]) }) > 0
 
   function refresh() {
@@ -76,7 +81,7 @@ export default function AppHeader({ page = 'overview' }: { page?: Page }) {
             </NavLink>
           ))}
         </nav>
-        {page === 'overview' ? <OverviewUpdated /> : page === 'health' ? <HealthUpdated /> : page === 'spend' ? <SpendUpdated /> : null}
+        {page === 'overview' ? <OverviewUpdated /> : page === 'board' ? <BoardUpdated /> : page === 'health' ? <HealthUpdated /> : page === 'spend' ? <SpendUpdated /> : null}
         <div className="ml-auto flex items-center gap-2">
           <Button variant="outline" onClick={refresh} aria-label="Refresh" aria-busy={fetching}>
             <RefreshCw className={fetching ? 'animate-spin' : undefined} aria-hidden="true" />

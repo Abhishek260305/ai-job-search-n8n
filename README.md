@@ -103,7 +103,7 @@ n8n only schedules and calls things. All the rules live in the Python service, w
 | **Customizable schedules:** when each stage runs and how much it does, the scoring model, timezone, run-now; paper size and writing-style notes for tailoring | ✅ live |
 | Gmail status tracking (interview / rejection / offer detection), optional; manual tracking works today | ⬜ planned |
 | Adzuna and Jooble (free API key) | not built yet |
-| **Web dashboard** (optional): jobs with filters, charts, CSV export, details and PDFs, status editing; a health page with a pause button; a spend page; a settings page (schedules, optional parts, tailoring, caps you can lower); a search page (profile, sources, company boards); phone layout; password-protected, with its own low-privilege database role ([dashboard](docs/dashboard.md)) | ✅ live; a Kanban board and requeue button are planned |
+| **Web dashboard** (optional): jobs with filters, charts, CSV export, details and PDFs, status editing; a health page with a pause button; a spend page; a settings page (schedules, optional parts, tailoring, caps you can lower); a search page (profile, sources, company boards); a Kanban board with the status history of every application, your response rate, notes and contacts on every job and follow-up reminders (the newest parts); phone layout; password-protected, with its own low-privilege database role ([dashboard](docs/dashboard.md)) | ✅ live (the Kanban board is the newest part); notes, follow-up reminders, a tailor button and a requeue button are planned |
 | Interview prep, company research | ⬜ optional |
 
 Details and the history of each phase: [docs/roadmap.md](docs/roadmap.md).
