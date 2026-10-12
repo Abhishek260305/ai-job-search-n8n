@@ -254,6 +254,7 @@ scripts/jobsearch review                                  # when you are ready t
 ```bash
 scripts/jobsearch tailor-settings set --mode manual      # then: scripts/jobsearch tailor 24, or /tailor 24
 ```
+On the dashboard: Settings, Tailoring, mode **Manual**, then open any job and press **Tailor this job…** (it shows the cost and asks first).
 
 **"Tailor only the jobs that need it."**
 ```bash

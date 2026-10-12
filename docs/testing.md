@@ -90,6 +90,8 @@ cd dashboard/web && npm ci && npm test && npm run typecheck && npm run lint && n
 
 `scraper/loop_rehearsal.py` runs the **real** service code and the **real** SQL against a throwaway database (`jobsearch_loop_test`, dropped at the end; the real `jobsearch` database is never touched) with the stand-ins misbehaving, and checks that calls and dollars stay inside a hard bound. It makes no real call and costs nothing:
 
+It includes tailoring **on request** (the dashboard's button): a storm of 500 presses in 25 seconds must start one run, and a press every two minutes all day must stay under the daily cap. The unit tests for that path are `scraper/tests/test_ondemand.py` (the run registry: one at a time, the cooldown, nothing leaks) and `scraper/tests/test_app_ondemand.py` (the estimate, every refusal, the agreed cost); the dashboard's are `dashboard/api/tests/test_tailor_page.py` and `dashboard/web/src/components/board/tailor.test.tsx`.
+
 ```bash
 docker compose run --rm --no-deps -T \
   -e ANTHROPIC_API_KEY=stub-not-a-real-key -e APIFY_TOKEN_CURIOUS=tok-a -e APIFY_TOKEN_CHEAP= -e APIFY_TOKEN_BEBITY= \

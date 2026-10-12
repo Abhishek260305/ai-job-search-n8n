@@ -4,6 +4,7 @@ import { ApiError } from '@/api/client'
 import { useJob, useJobs, useSummary } from '@/api/hooks'
 import type { JobDetail } from '@/api/types'
 import JobTimeline from '@/components/board/JobTimeline'
+import TailorSection from '@/components/board/TailorSection'
 import TrackingForm from '@/components/board/TrackingForm'
 import StatusBadge from '@/components/StatusBadge'
 import StatusSelect from '@/components/StatusSelect'
@@ -261,6 +262,7 @@ function JobBody({ job }: { job: JobDetail }) {
       </SheetHeader>
       <div className="flex-1 space-y-6 overflow-y-auto p-4">
         <Links job={job} />
+        <TailorSection job={job} />
         <WhyThisScore job={job} threshold={summary.data?.threshold ?? null} />
         <Safety job={job} />
         <Description text={job.description} />

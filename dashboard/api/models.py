@@ -309,6 +309,67 @@ class UndoResult(BaseModel):
     status: PipelineStatus               # what the job is after the undo
 
 
+# ---------------------------------------------------------------- version 3c: tailor this job
+# The scraper's own reports (scraper/app.py /tailor/estimate, /tailor/start, /tailor/status), shaped for the page. The scraper
+# decides everything; the page only shows it. Nothing here carries a file path.
+
+class TailorBudget(BaseModel):
+    day_remaining: float
+    month_remaining: float
+    blocked: bool
+    blocked_reason: str | None
+
+
+class TailorExisting(BaseModel):
+    status: str                          # what is there now: running it again replaces it
+    has_resume: bool
+    has_cover_letter: bool
+
+
+class TailorEstimate(BaseModel):
+    job_id: int
+    can_run: bool
+    reason: str | None                   # why not, in words, when can_run is false
+    mode: str                            # the tailoring mode (auto or manual): the button works in both
+    model: str
+    cover_letter: bool
+    uses_model: bool                     # false when nothing is sent to Claude (a job above the score band with no cover letter)
+    variant: Literal["tailored", "base"] | None
+    typical_usd: float                   # what it has cost lately
+    at_most_usd: float                   # the most the guard allows it to cost: what the user agrees to
+    existing: TailorExisting | None
+    budget: TailorBudget
+
+
+class TailorOutcome(BaseModel):
+    job_id: int | None = None
+    status: str                          # drafted, approved, budget_paused, failed, api_error ...
+    variant: str | None = None
+    needs_attention: bool | None = None
+    attention: list[str] = Field(default_factory=list)
+    cost_usd: float | None = None
+    has_cover_letter: bool | None = None
+    pages: int | None = None
+    reason: str | None = None
+    requirements: dict[str, int] | None = None
+
+
+class TailorState(BaseModel):
+    state: Literal["idle", "running", "done", "failed"]
+    started_at: float | None = None
+    finished_at: float | None = None
+    result: TailorOutcome | None = None
+    error: str | None = None
+    cost_usd: float | None = None        # what a run that failed had cost before it stopped
+
+
+class TailorStart(BaseModel):
+    """`max_cost_usd` is the "at most" the user was shown; the scraper refuses if it would now be more."""
+    model_config = ConfigDict(extra="forbid")
+
+    max_cost_usd: StrictFloat | StrictInt = Field(ge=0, le=100)     # required: the page never starts a run without agreeing a cost
+
+
 class FollowUpDays(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

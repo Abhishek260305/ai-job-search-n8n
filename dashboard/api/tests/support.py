@@ -286,6 +286,17 @@ SCRAPER_PROFILE = {
 }
 
 
+TAILOR_ESTIMATE = {
+    "job_id": 1, "can_run": True, "reason": None, "mode": "manual", "model": "claude-sonnet-5-5", "cover_letter": True, "uses_model": True,
+    "variant": "tailored", "typical_usd": 0.047, "at_most_usd": 0.31, "existing": None,
+    "budget": {"day_remaining": 1.4, "month_remaining": 9.0, "blocked": False, "blocked_reason": None},
+}
+
+TAILOR_DONE = {"state": "done", "started_at": 1760000000.0, "finished_at": 1760000042.0, "result": {
+    "job_id": 1, "status": "drafted", "variant": "tailored", "needs_attention": True, "attention": ["the resume is 2 pages (limit 1)"],
+    "cost_usd": 0.047, "has_cover_letter": True, "pages": 2, "requirements": {"matched": 4, "bridged": 1, "gap": 0}}}
+
+
 class FakeScraper:
     """Answers like ScraperClient from fixed reports and records every write. Set `fail` to make the next call raise."""
     def __init__(self):
@@ -295,6 +306,7 @@ class FakeScraper:
         self.profile_state = {**SCRAPER_PROFILE, "profile": {**SCRAPER_PROFILE["profile"]}}
         self.stale = False                                   # the next save finds the profile changed elsewhere
         self.found = {"name": "x", "tried": ["x"], "matches": []}
+        self.tailor_state = {"state": "idle"}
 
     def _call(self, *call):
         self.calls.append(call)
@@ -352,6 +364,18 @@ class FakeScraper:
     def find_board(self, name):
         self._call("find_board", name)
         return {**self.found, "name": name}
+
+    def tailor_estimate(self, job_id):
+        self._call("tailor_estimate", job_id)
+        return {**TAILOR_ESTIMATE, "job_id": job_id}
+
+    def tailor_start(self, job_id, max_cost_usd):
+        self._call("tailor_start", job_id, max_cost_usd)
+        return {"state": "running", "started_at": 1760000000.0}
+
+    def tailor_status(self, job_id):
+        self._call("tailor_status", job_id)
+        return self.tailor_state
 
     def writes(self):
         return [c for c in self.calls if c[0].startswith(("set_", "run_", "save_"))]

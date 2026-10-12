@@ -527,3 +527,48 @@ def test_each_run_starts_its_own_spend_count(tmp_path):
     other = dict(JOB_ROW, id=25)
     svc.run_job(other, SETTINGS)                                     # then an outage before anything is billed
     assert store.released == [25]
+
+
+# ------------------------------------------------------------------ a run the user asked for (dashboard version 3c)
+
+def test_a_failed_run_reports_what_it_cost_so_it_never_looks_free(tmp_path):
+    store, ai = FakeStore(), ScriptedAI("nope", "still nope")
+    r = service(tmp_path, store, ai).run_job(JOB_ROW, SETTINGS)
+    assert r["status"] == "failed" and r["cost_usd"] == round(2 * 0.0123, 6), "both billed calls are in the figure"
+    store, ai = FakeStore(), ScriptedAI(patch(summary="Backend engineer experienced with Terraform."), A.AnthropicError("overloaded", 529, retryable=True))
+    r = service(tmp_path, store, ai).run_job(JOB_ROW, SETTINGS)
+    assert r["status"] == "api_error" and r["cost_usd"] == 0.0123, "the draft was billed before the outage"
+    store = FakeStore()
+    r = service(tmp_path, store, ScriptedAI(A.AnthropicError("overloaded", 529, retryable=True))).run_job(JOB_ROW, SETTINGS)
+    assert r["status"] == "api_error" and r["cost_usd"] == 0.0, "an outage before anything was billed cost nothing"
+
+
+def test_a_run_the_user_started_does_not_touch_the_schedules_counters(tmp_path):
+    store = FakeStore()
+    service(tmp_path, store, ScriptedAI("nope", "still nope")).run_job(JOB_ROW, SETTINGS, track=False)
+    assert store.failures == [] and store.released == []
+    store = FakeStore()
+    service(tmp_path, store, ScriptedAI(A.AnthropicError("overloaded", 529, retryable=True))).run_job(JOB_ROW, SETTINGS, track=False)
+    assert store.failures == [] and store.released == [], "an outage must not hand back a claim this run never made"
+    store = FakeStore(budget={"month_remaining": 0.01, "day_remaining": 0.01})
+    r = service(tmp_path, store, ScriptedAI(patch())).run_job(JOB_ROW, SETTINGS, track=False)
+    assert r["status"] == "budget_paused" and store.released == []
+
+
+def test_the_schedule_still_counts_attempts_as_before(tmp_path):
+    store = FakeStore()
+    service(tmp_path, store, ScriptedAI("nope", "still nope")).run_job(JOB_ROW, SETTINGS)
+    assert store.failures == [24]
+    store = FakeStore()
+    service(tmp_path, store, ScriptedAI(A.AnthropicError("overloaded", 529, retryable=True))).run_job(JOB_ROW, SETTINGS)
+    assert store.released == [24]
+
+
+def test_an_old_cover_letter_is_removed_when_this_run_has_none(tmp_path):
+    d = tmp_path / "applications" / "24-globex-senior-backend-engineer"
+    service(tmp_path, ai=ScriptedAI(patch())).run_job(JOB_ROW, SETTINGS)
+    assert (d / "cover_letter.pdf").exists()
+    p = patch(); p.pop("cover_letter")
+    service(tmp_path, ai=ScriptedAI(p)).run_job(JOB_ROW, dict(SETTINGS, cover_letter=False))
+    assert not (d / "cover_letter.pdf").exists(), "a stale letter would be sent by /send"
+    assert (d / "resume.pdf").exists()

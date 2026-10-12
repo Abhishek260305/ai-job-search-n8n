@@ -166,6 +166,22 @@ describe('accessibility (axe)', () => {
     expect(await violations()).toEqual([])
   })
 
+  it('the tailoring confirmation and a finished run', async () => {
+    server.use(
+      http.get('/api/jobs/:id/tailor/estimate', () => HttpResponse.json({
+        job_id: 1, can_run: true, reason: null, mode: 'manual', model: 'claude-sonnet-5-5', cover_letter: true, uses_model: true, variant: 'tailored',
+        typical_usd: 0.047, at_most_usd: 0.31, existing: { status: 'drafted', has_resume: true, has_cover_letter: true },
+        budget: { day_remaining: 1.4, month_remaining: 9, blocked: false, blocked_reason: null } })),
+      http.get('/api/jobs/:id/tailor', () => HttpResponse.json({ state: 'done', started_at: 1, finished_at: 2, result: { status: 'drafted', needs_attention: true,
+        attention: ['the resume is 2 pages (limit 1)'], cost_usd: 0.047, requirements: { matched: 4, bridged: 1, gap: 0 } } })),
+    )
+    renderApp('/?job=1')
+    await screen.findByText('Ready for your review. It cost $0.05.', {}, { timeout: 5000 })
+    await userEvent.click(await screen.findByRole('button', { name: /Tailor (this job|again)…/ }))
+    await screen.findByText(/Costs about/)
+    expect(await violations({ popup: true })).toEqual([])
+  })
+
   it('a job open in the panel', async () => {
     server.use(http.get('/api/jobs/:id', () => HttpResponse.json(jobDetail(1, {
       application_status: 'approved', pipeline_status: 'approved', has_resume: true, scam_risk: 'medium',

@@ -346,6 +346,16 @@ class PgStore:
             cur.execute("SELECT note_tailor_failure(%s::bigint) AS n", (job_id,))
             return cur.fetchone()["n"]
 
+    def recent_tailor_cost(self) -> Optional[float]:
+        """What a tailored application has cost lately (the MEDIAN of the last 20 that cost anything), for the estimate shown
+        before an on-demand run; None when there is no history yet. The median, because an application's cost adds up when it
+        is tailored again, and a few of those must not make a single run look dear."""
+        with self.cursor() as cur:
+            cur.execute("SELECT (percentile_cont(0.5) WITHIN GROUP (ORDER BY cost_usd))::float AS c FROM (SELECT cost_usd FROM applications "
+                        "WHERE variant = 'tailored' AND cost_usd > 0 ORDER BY updated_at DESC LIMIT 20) t")
+            row = cur.fetchone()
+            return row["c"] if row and row["c"] is not None else None
+
     def applications_today(self) -> int:
         with self.cursor() as cur:
             cur.execute("SELECT applications_today() AS n")

@@ -61,7 +61,9 @@ class ScraperClient:
         self._timeout = timeout
         self._opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect).open
 
-    def _call(self, method: str, path: str, body: dict | None = None, timeout: float | None = None) -> dict:
+    def _call(self, method: str, path: str, body: dict | None = None, timeout: float | None = None, refusals: bool = False) -> dict:
+        """`refusals`: a 409 is the scraper refusing the request for a reason it states (tailoring: a run is going, a cap would be
+        crossed, ...) and not "the search profile changed": it is passed on as a 422 with the scraper's own words."""
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = urllib.request.Request(self._base + path, data=data, method=method,
                                          headers={"Content-Type": "application/json", "Accept": "application/json"})
@@ -80,7 +82,15 @@ class ScraperClient:
                     detail = _errors_of(e.read(MAX_BODY))
                 except (OSError, http.client.HTTPException):
                     detail = None
+                if refusals:
+                    raise Invalid(detail or "the scraper refused that") from None
                 raise ProfileChanged(detail or "the search profile was changed somewhere else: reload to see it") from None
+            if e.code == 400 and refusals:      # the scraper's own words, e.g. "resume not found: run /setup"
+                try:
+                    detail = _errors_of(e.read(MAX_BODY))
+                except (OSError, http.client.HTTPException):
+                    detail = None
+                raise Invalid(detail or "the scraper could not do that") from None
             if e.code == 404:       # not a "job not found": the address or the scraper's version is wrong
                 raise Unavailable("the scraper does not have that endpoint (is SCRAPER_URL right, and the scraper up to date?)") from None
             log.warning("scraper %s %s answered %s", method, path, e.code)
@@ -132,6 +142,19 @@ class ScraperClient:
 
     def save_profile(self, profile: dict, version: str) -> dict:
         return self._call("POST", "/profile", {"profile": profile, "version": version})
+
+    # ---- tailoring one job on request (the scraper holds every rule; see scraper/app.py) ----------------------------
+    def tailor_estimate(self, job_id: int) -> dict:
+        return self._call("GET", f"/tailor/estimate?job_id={int(job_id)}", refusals=True)
+
+    def tailor_start(self, job_id: int, max_cost_usd: float | None) -> dict:
+        body: dict = {"job_id": int(job_id)}
+        if max_cost_usd is not None:
+            body["max_cost_usd"] = float(max_cost_usd)
+        return self._call("POST", "/tailor/start", body, refusals=True)
+
+    def tailor_status(self, job_id: int) -> dict:
+        return self._call("GET", f"/tailor/status?job_id={int(job_id)}", refusals=True)
 
     def find_board(self, name: str) -> dict:
         return self._call("POST", "/boards/find", {"name": name}, timeout=FIND_TIMEOUT_S)

@@ -221,6 +221,7 @@ export const server = setupServer(
   http.get('/api/stats', () => HttpResponse.json(STATS)),
   http.get('/api/jobs/:id/events', () => HttpResponse.json(EVENTS)),
   http.get('/api/jobs/:id/tracking', () => HttpResponse.json(NO_TRACKING)),
+  http.get('/api/jobs/:id/tailor', () => HttpResponse.json({ state: 'idle' })),
   http.get('/api/jobs/:id', ({ params }) => HttpResponse.json(jobDetail(Number(params.id)))),
 )
 

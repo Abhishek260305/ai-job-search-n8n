@@ -23,6 +23,9 @@ Pipeline stages used by the n8n workflows (database-backed; see pipeline.py):
   GET  /profile  POST /profile       the search profile (terms, sources, company boards, filters), read and saved with the CLI's validation
   POST /boards/find                  which job board a company uses (read-only probes of the five boards' public APIs)
   POST /tailor/run {job_id?, limit?}  tailor one job (or the next eligible ones): draft, audit, render, save, notify
+  GET  /tailor/estimate?job_id=N     what tailoring this one job would cost and whether it may start (the dashboard's button)
+  POST /tailor/start {job_id, max_cost_usd?}   start tailoring one job in the background (409 if it may not: a run is going, it was
+                                     just done, a spending cap would be crossed ...);  GET /tailor/status?job_id=N   how it is going
   GET  /tailor/settings  POST /tailor/settings   mode, approval, score band, daily limit, model, cover letter
   POST /telegram/poll                process pending Telegram commands (/approve, /skip, /tailor, /status, ...)
   GET  /features  POST /features    which optional parts are on (tailoring, telegram, digest) and what is configured
@@ -42,6 +45,7 @@ import logging
 import os
 import re
 import threading
+from datetime import date, datetime, timezone
 from typing import Annotated, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -57,6 +61,8 @@ import features
 import pipeline
 import profile_tools
 import tailor_service
+import ondemand
+import tailor
 import telegram_bot
 import safety
 import schedules
@@ -557,6 +563,153 @@ def tailor_run(req: TailorRunRequest):
             out["telegram"] = "sent" if bot else ("not used: approval is cli" if tg["on"] else tg["reason"])
             return out
     return _db_call(run)
+
+
+# ---------------------------------------------------------------- tailoring one job on request (dashboard version 3c)
+# The estimate, the start and the progress of a run started by a click. It works whatever the tailoring MODE is (manual
+# means nothing is tailored unless asked, which is exactly this), but not while the tailoring switch is off. Every rule that
+# protects the money is here, not in the page: the switch, the job's eligibility, one run at a time, a cooldown per job, the
+# spending caps (priced at the worst case before anything is spent) and, if the page sends it, the most the user agreed to.
+
+_ondemand = ondemand.OnDemandRuns()
+_NOT_TAILORABLE = ("scam_blocked", "filtered_out", "expired", "applied")      # as /tailor/run
+
+
+class TailorStartRequest(BaseModel):
+    job_id: Annotated[int, Field(strict=True, ge=1, le=2**63 - 1)]
+    max_cost_usd: Optional[Annotated[float, Field(strict=False, ge=0, le=100)]] = None      # the "at most" the user was shown and agreed to
+
+
+_SUBMITTED = ("applied", "in_progress", "interview", "offer", "rejected", "withdrawn")      # an application at one of these is not touched
+
+
+def _on_demand_plan(s, job_id: int, *, check_registry: bool = True) -> dict:
+    """Everything that decides whether and how a run may start. Never raises for a normal "no": the reason is in `blocker`
+    (with the HTTP code `code` the start answers with), so the estimate can show it and the start can refuse with it. The run
+    asks again inside the tailoring lock (`check_registry=False`: by then its own entry is in the registry), because a start can
+    wait behind a scheduled run and the world may have changed."""
+    eff = _features(s)["tailoring"]
+    settings = s.tailor_settings()
+    plan = {"job_id": job_id, "blocker": None, "code": 409, "mode": settings["mode"], "model": settings["model"],
+            "cover_letter": bool(settings["cover_letter"]), "uses_model": False, "variant": None, "typical_usd": 0.0,
+            "at_most_usd": 0.0, "existing": None}
+    status = s.budget_status()
+    plan["budget"] = {"day_remaining": float(status["day_remaining"]), "month_remaining": float(status["month_remaining"]),
+                      "blocked": bool(status["blocked"]), "blocked_reason": status.get("blocked_reason")}
+
+    def block(code: int, why: str) -> dict:
+        plan["blocker"], plan["code"] = why, code
+        return plan
+
+    if not eff["on"]:
+        return block(409, f"tailoring is {eff['reason']}")
+    if (s.schedule_pause() or {}).get("paused"):
+        return block(409, "everything is paused (the emergency brake): resume first with scripts/jobsearch schedule resume")
+    job = s.get_job(job_id)
+    if not job:
+        return block(422, f"no job {job_id}")
+    if job["status"] in _NOT_TAILORABLE or job.get("score") is None:
+        return block(422, f"job {job_id} is {job['status']} (score {job.get('score')}); not tailored")
+    app = s.application(job_id)
+    if app:
+        plan["existing"] = {"status": app["status"], "has_resume": bool(app.get("resume_path")),
+                            "has_cover_letter": bool(app.get("cover_letter_path"))}
+        if app["status"] in _SUBMITTED:
+            return block(422, f"this job's application is already {app['status'].replace('_', ' ')}: its files are not replaced")
+        # a run just before a restart of the scraper (the registry is lost) is still a run a moment ago
+        updated = app.get("updated_at")
+        if updated is not None and getattr(updated, "tzinfo", None) is not None and app.get("variant") == "tailored":
+            age = (datetime.now(timezone.utc) - updated).total_seconds()
+            if 0 <= age < ondemand.COOLDOWN_S:
+                return block(409, f"this job was tailored a moment ago: wait about {int(ondemand.COOLDOWN_S - age) + 1} seconds before doing it again")
+    if check_registry:
+        why = _ondemand.refusal(job_id)
+        if why:
+            return block(409, why)
+    plan["variant"] = tailor_service.choose_variant(job.get("score"), settings)
+    if plan["variant"] == "tailored" or plan["cover_letter"]:
+        plan["uses_model"] = True
+        mode = "full" if plan["variant"] == "tailored" else "cover_only"
+        prompt = tailor.prepare(_load_resume(), scoring.load_profile(os.environ.get("PROFILE_PATH", "/config/profile.json")), job,
+                                cover_letter=plan["cover_letter"], mode=mode,
+                                notes={"strengths": job.get("strengths") or [], "gaps": job.get("gaps") or []},
+                                today=date.today(), style_notes=settings.get("style_notes"))
+        worst = budget.worst_case_item_cost(s.pricing(settings["model"]), len(prompt["system"]) + len(prompt["user"]) * 2 + 9000,
+                                            prompt["max_tokens"])
+        # a draft and a possible revision: what the guard in run_job reserves; plus the fact-check call (a cheap model by
+        # default, priced at the worst case of whatever model is set), which run_job checks just in time
+        verify = 0.0
+        if settings.get("verify") and mode == "full":
+            vmodel = settings.get("verify_model") or "claude-haiku-5-5"
+            verify = budget.worst_case_item_cost(s.pricing(vmodel), len(prompt["system"]) + len(prompt["user"]) + 9000, 1500)
+        plan["at_most_usd"] = round(worst * 2 + verify, 4)
+        typical = s.recent_tailor_cost()
+        plan["typical_usd"] = round(min(typical if typical else 0.05, plan["at_most_usd"]), 4)
+        if budget.allowed_items(status, 1, worst * 2) < 1:
+            return block(409, "not enough budget left for this job" + (f" ({status['blocked_reason']})" if status["blocked"] else
+                                                                      " (today's or this month's cap)"))
+    return plan
+
+
+@app.get("/tailor/estimate")
+def tailor_estimate(job_id: Annotated[int, Query(ge=1, le=2**63 - 1)]):
+    def run(s):
+        plan = _on_demand_plan(s, job_id)
+        plan["can_run"] = plan["blocker"] is None
+        plan["reason"] = plan.pop("blocker")
+        plan.pop("code")
+        return plan
+    return _db_call(run)
+
+
+@app.post("/tailor/start")
+def tailor_start(req: TailorStartRequest):
+    def run(s):
+        plan = _on_demand_plan(s, req.job_id)
+        if plan["blocker"]:
+            raise HTTPException(status_code=plan["code"], detail={"errors": [plan["blocker"]]})
+        if req.max_cost_usd is not None and plan["at_most_usd"] > req.max_cost_usd + 1e-9:
+            raise HTTPException(status_code=409, detail={"errors": [
+                f"this would now cost up to ${plan['at_most_usd']:.2f}, more than the ${req.max_cost_usd:.2f} you were shown: look again"]})
+        if _tailor_lock.locked():              # a scheduled or Telegram run holds it: say so now instead of waiting in silence
+            raise HTTPException(status_code=409, detail={"errors": [
+                "a scheduled or Telegram tailoring run is going right now: try again in a minute"]})
+        job_id, agreed = req.job_id, req.max_cost_usd
+
+        def work() -> dict:
+            store = get_store()
+            # Never wait for the lock: a start that queued behind another run would spend later than the user thought,
+            # on a world that may have changed. Take it now or stop, having spent nothing.
+            if not _tailor_lock.acquire(blocking=False):
+                raise ondemand.Failed("a scheduled or Telegram tailoring run took over just now: nothing was started and nothing was spent")
+            try:
+                again = _on_demand_plan(store, job_id, check_registry=False)           # everything, once more, inside the lock
+                if again["blocker"]:
+                    raise ondemand.Failed(f"{again['blocker']} (nothing was spent)")
+                if agreed is not None and again["at_most_usd"] > agreed + 1e-9:
+                    raise ondemand.Failed(f"it would now cost up to ${again['at_most_usd']:.2f}, more than the ${agreed:.2f} you agreed to (nothing was spent)")
+                svc = _tailor_service(store)
+                health = getattr(getattr(svc, "pdf", None), "health", None)
+                if again["uses_model"] and health is not None and not health():
+                    # without the PDF service a run pays for a draft and then cannot save it: check before spending
+                    raise ondemand.Failed("the PDF service is not answering: nothing was started and nothing was spent")
+                try:
+                    return svc.run_job(store.get_job(job_id), track=False)
+                except Exception as e:
+                    raise ondemand.Failed(ondemand._plain(e), spent=getattr(svc, "_job_spend", 0.0))
+            finally:
+                _tailor_lock.release()
+
+        try:
+            return _ondemand.start(job_id, work)
+        except ondemand.Refused as e:
+            raise HTTPException(status_code=409, detail={"errors": [str(e)]})
+    return _db_call(run)
+
+
+@app.get("/tailor/status")
+def tailor_status(job_id: Annotated[int, Query(ge=1, le=2**63 - 1)]):
+    return _ondemand.status(job_id)
 
 
 @app.get("/tailor/settings")

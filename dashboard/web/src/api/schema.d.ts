@@ -157,6 +157,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/{job_id}/tailor/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tailor Estimate */
+        get: operations["tailor_estimate_api_jobs__job_id__tailor_estimate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/tailor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tailor Status */
+        get: operations["tailor_status_api_jobs__job_id__tailor_get"];
+        put?: never;
+        /** Tailor Start */
+        post: operations["tailor_start_api_jobs__job_id__tailor_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/undo": {
         parameters: {
             query?: never;
@@ -1491,6 +1526,101 @@ export interface components {
              */
             generated_at: string;
         };
+        /** TailorBudget */
+        TailorBudget: {
+            /** Day Remaining */
+            day_remaining: number;
+            /** Month Remaining */
+            month_remaining: number;
+            /** Blocked */
+            blocked: boolean;
+            /** Blocked Reason */
+            blocked_reason: string | null;
+        };
+        /** TailorEstimate */
+        TailorEstimate: {
+            /** Job Id */
+            job_id: number;
+            /** Can Run */
+            can_run: boolean;
+            /** Reason */
+            reason: string | null;
+            /** Mode */
+            mode: string;
+            /** Model */
+            model: string;
+            /** Cover Letter */
+            cover_letter: boolean;
+            /** Uses Model */
+            uses_model: boolean;
+            /** Variant */
+            variant: ("tailored" | "base") | null;
+            /** Typical Usd */
+            typical_usd: number;
+            /** At Most Usd */
+            at_most_usd: number;
+            existing: components["schemas"]["TailorExisting"] | null;
+            budget: components["schemas"]["TailorBudget"];
+        };
+        /** TailorExisting */
+        TailorExisting: {
+            /** Status */
+            status: string;
+            /** Has Resume */
+            has_resume: boolean;
+            /** Has Cover Letter */
+            has_cover_letter: boolean;
+        };
+        /** TailorOutcome */
+        TailorOutcome: {
+            /** Job Id */
+            job_id?: number | null;
+            /** Status */
+            status: string;
+            /** Variant */
+            variant?: string | null;
+            /** Needs Attention */
+            needs_attention?: boolean | null;
+            /** Attention */
+            attention?: string[];
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Has Cover Letter */
+            has_cover_letter?: boolean | null;
+            /** Pages */
+            pages?: number | null;
+            /** Reason */
+            reason?: string | null;
+            /** Requirements */
+            requirements?: {
+                [key: string]: number;
+            } | null;
+        };
+        /**
+         * TailorStart
+         * @description `max_cost_usd` is the "at most" the user was shown; the scraper refuses if it would now be more.
+         */
+        TailorStart: {
+            /** Max Cost Usd */
+            max_cost_usd: number;
+        };
+        /** TailorState */
+        TailorState: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "idle" | "running" | "done" | "failed";
+            /** Started At */
+            started_at?: number | null;
+            /** Finished At */
+            finished_at?: number | null;
+            result?: components["schemas"]["TailorOutcome"] | null;
+            /** Error */
+            error?: string | null;
+            /** Cost Usd */
+            cost_usd?: number | null;
+        };
         /** TailoringChange */
         TailoringChange: {
             /** Mode */
@@ -2028,6 +2158,211 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobEvent"][];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    tailor_estimate_api_jobs__job_id__tailor_estimate_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TailorEstimate"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    tailor_status_api_jobs__job_id__tailor_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TailorState"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    tailor_start_api_jobs__job_id__tailor_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TailorStart"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TailorState"];
                 };
             };
             /** @description Forbidden */

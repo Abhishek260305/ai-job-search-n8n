@@ -91,7 +91,9 @@ class TailorService:
 
     # ------------------------------------------------------------ one job
 
-    def run_job(self, job: dict, settings: Optional[dict] = None) -> dict:
+    def run_job(self, job: dict, settings: Optional[dict] = None, *, track: bool = True) -> dict:
+        """Tailor one job. `track=False` (a run the user asked for) leaves the attempt counters alone: it never claimed the job,
+        so it must not hand back or add a claim that belongs to the schedule."""
         settings = settings or self.store.tailor_settings()
         job_id = job["id"]
         self._job_spend = 0.0
@@ -113,16 +115,19 @@ class TailorService:
             worst = budget.worst_case_item_cost(self.store.pricing(model), len(prompt["system"]) + len(prompt["user"]) * 2 + 9000,
                                                 prompt["max_tokens"])
             if budget.allowed_items(self.store.budget_status(), 1, worst * 2) < 1:   # a draft and a possible revision
-                self.store.release_tailor_claim(job_id)        # nothing was spent: do not count this as an attempt
+                if track:
+                    self.store.release_tailor_claim(job_id)    # nothing was spent: do not count this as an attempt
                 return {"job_id": job_id, "status": "budget_paused", "reason": "not enough budget left for this job"}
             try:
                 patch, audit_dict, requirements, spent, notes, attention = self._draft_review_repair(job, prompt, mode, cover, model, settings)
             except _Failure as f:
-                if f.penalise:
+                if track and f.penalise:
                     self.store.note_tailor_failure(job_id)
-                elif self._job_spend <= 0:
+                elif track and self._job_spend <= 0:
                     self.store.release_tailor_claim(job_id)    # the API failed before anything was billed: not the job's fault
-                return {"job_id": job_id, "status": "failed" if f.penalise else "api_error", "reason": f.reason}
+                # what was billed before the failure is reported too: a failed run that cost money must not look free
+                return {"job_id": job_id, "status": "failed" if f.penalise else "api_error", "reason": f.reason,
+                        "cost_usd": round(self._job_spend, 6)}
 
         view = tailor.apply_patch(self.resume, patch if variant == "tailored" else None, self.profile)
         basics = self.resume["basics"]
@@ -152,6 +157,8 @@ class TailorService:
         (files_dir / "resume.pdf").write_bytes(rendered["pdf"])
         if cover_pdf:
             (files_dir / "cover_letter.pdf").write_bytes(cover_pdf)
+        else:
+            (files_dir / "cover_letter.pdf").unlink(missing_ok=True)     # no letter this time: an old one must not be sent by mistake
         (files_dir / "tailored_resume.json").write_text(json.dumps(view, indent=2, ensure_ascii=False), encoding="utf-8")
         (files_dir / "patch.json").write_text(json.dumps(patch, indent=2, ensure_ascii=False), encoding="utf-8")
         (files_dir / "audit.json").write_text(json.dumps(audit_dict, indent=2, ensure_ascii=False), encoding="utf-8")

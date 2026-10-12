@@ -251,6 +251,55 @@ def tailoring_scenarios(conn, store, rep: Report) -> None:
     rep.check(name, "jobs parked", parked(conn, "tailor"), JOBS, parked(conn, "tailor") == JOBS)
 
 
+def on_demand_scenarios(conn, store, rep: Report) -> None:
+    """Tailoring one job on request (the dashboard button): the same paid call as the schedule, started by a person. Two
+    ways to go wrong: a storm of presses (a double click, a script, a stuck key), and a patient person who keeps asking
+    all day. The first is stopped by the one-at-a-time rule and the cooldown, the second by the spending cap."""
+    import anthropic_client
+    import ondemand
+    import stubs
+    import tailor_service
+
+    class Clock:
+        now = 1_000_000.0
+        def __call__(self): return self.now
+
+    def press_job(handler, presses: int, gap_s: float, pdf=None):
+        """`presses` start requests, `gap_s` seconds apart, each run to completion at once (the worst case for spending)."""
+        reset(conn, 1, status="shortlisted", score=80)
+        clock = Clock()
+        runs = ondemand.OnDemandRuns(clock=clock, spawn=lambda fn: fn())
+        refused = started = 0
+        with stubs.StubAnthropic(handler) as ai, tempfile.TemporaryDirectory() as out:
+            anthropic_client.API_URL = ai.url
+            try:
+                svc = tailor_service.TailorService(store, anthropic_client.AnthropicClient("stub", client=httpx.Client(timeout=10), sleep=lambda s: None),
+                                                   pdf or CrashingPDF(), out, RESUME, PROFILE)
+                for _ in range(presses):
+                    try:
+                        runs.start(1, lambda: svc.run_job(store.get_job(1)))
+                        started += 1
+                    except ondemand.Refused:
+                        refused += 1
+                    clock.now += gap_s
+            finally:
+                anthropic_client.API_URL = "https://api.anthropic.com/v1/messages"
+        return ai, started, refused
+
+    ai, started, refused = press_job(stubs.tailor_draft(GOOD_PATCH), presses=500, gap_s=0.05)
+    name = "tailor on demand: 500 presses in 25 seconds"
+    rep.check(name, "runs started", started, 1, started == 1, "(the cooldown refuses the rest)")
+    rep.check(name, "billed calls", ai.billed, 2, ai.billed <= 2, "(a draft and at most one revision)")
+
+    ai, started, refused = press_job(stubs.tailor_draft(GOOD_PATCH), presses=400, gap_s=130)
+    name = "tailor on demand: a press every two minutes, all day"
+    cap = 1.5
+    rep.check(name, "Claude spend logged", round(spend(conn, "anthropic"), 3), cap, spend(conn, "anthropic") <= cap, "(the daily cap holds)")
+    rep.check(name, "runs started", started, 400, started == 400, "(every press was allowed to try: the gap is longer than the cooldown)")
+    rep.check(name, "presses the cooldown refused", refused, 0, refused == 0)
+    rep.check(name, "billed calls stopped by the budget guard", ai.billed, "fewer than the presses", ai.billed < started, "(the rest spent nothing)")
+
+
 # ----------------------------------------------------------------------------- Apify, through the real endpoint
 
 def apify_scenarios(conn, rep: Report) -> None:
@@ -345,6 +394,8 @@ def main() -> int:
         scoring_scenarios(conn, store, profile, rep)
         print("Tailoring scenarios ...", flush=True)
         tailoring_scenarios(conn, store, rep)
+        print("Tailor-on-demand scenarios ...", flush=True)
+        on_demand_scenarios(conn, store, rep)
         print("Apify scenarios ...", flush=True)
         apify_scenarios(conn, rep)
         print("Scheduler scenarios ...", flush=True)

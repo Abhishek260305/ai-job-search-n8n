@@ -133,7 +133,7 @@ Nothing can loop on money (see [runaway-protection.md](runaway-protection.md)).
 - ✅ Apify: a run starts only if its hard charge limit fits the remaining budget; at most 2 runs per search; failed runs that started are counted; a hung run is aborted; a budget that cannot be read means nothing is started
 - ✅ A real Apify call showed the balance lags right after a run, so an unchanged balance counts as "unknown" (1.5 times the estimate), not free
 - ✅ Scoring hands a claim back when the model gave no reply; the collect summary reports searches skipped by the budget; doctor warns about parked jobs, paused schedules, Apify limits and a stalled scorer
-- ✅ Testing: stand-in Anthropic and Apify servers (`scraper/stubs.py`), a guard that makes any real network call in a unit test fail, and a rehearsal (`scraper/loop_rehearsal.py`) that runs the real code and SQL against a throwaway database with the stand-ins misbehaving: **33 of 33 checks within their bounds**
+- ✅ Testing: stand-in Anthropic and Apify servers (`scraper/stubs.py`), a guard that makes any real network call in a unit test fail, and a rehearsal (`scraper/loop_rehearsal.py`) that runs the real code and SQL against a throwaway database with the stand-ins misbehaving: **39 of 39 checks within their bounds**
 - ✅ 736 service tests, 111 CLI tests, SQL tests for the guards
 - See [testing.md](testing.md)
 
@@ -174,7 +174,7 @@ A React + Vite + TypeScript app with a Python (FastAPI) API in its own opt-in co
 - ✅ **Version 3a** (built and tested; install: [dashboard.md](dashboard.md#adding-version-3a-to-an-existing-install)): status history (`application_events`), Kanban board, the numbers (response rate, days to a first reply, weekly)
 - ✅ **Undo** (built and tested, migration 020): take back a mistaken move so the history and the numbers never see it ([dashboard.md](dashboard.md#undo))
 - ✅ **Version 3b** (built and tested; install: [dashboard.md](dashboard.md#adding-version-3b-to-an-existing-install)): notes, contacts and referral on any job, a follow-up date, the Follow up list and card badges, an optional section in the Telegram digest, `scripts/jobsearch follow-up`
-- ⬜ **Version 3c:** on-demand tailoring button
+- ✅ **Version 3c** (built and tested, no migration; install: [dashboard.md](dashboard.md#adding-version-3c-to-an-existing-install)): "Tailor this job" on request, with the cost confirmed first, one run at a time and a cooldown per job
 - ⬜ **Later:** Gmail suggestions inbox (with Phase 6), match feedback, saved filters (phone access through Tailscale and the phone layout are done)
 
 ## Principles

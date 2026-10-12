@@ -14,6 +14,8 @@ Routes (see auth.py for how login works):
   GET  /api/jobs          one page of the jobs table (tab, filters, sort, page: models.JobsQuery)
   GET  /api/jobs/{id}     one job with every listing, for the details panel
   GET  /api/jobs/{id}/events   its timeline: every status change, with the note and who made it, and which one can be undone
+  GET  /api/jobs/{id}/tailor/estimate   what tailoring this job would cost, and whether it may start (from the scraper)
+  POST /api/jobs/{id}/tailor {max_cost_usd?}  start tailoring it in the background (the scraper may refuse); GET /api/jobs/{id}/tailor  progress
   POST /api/jobs/{id}/undo   {expected_status, event_id?} takes back the newest change if it was made here; 409 if it moved on
   GET/PUT /api/jobs/{id}/tracking   notes, contact, referral and follow-up date of a job; a save needs the version it read (409 if changed)
   PUT  /api/follow-ups/days   after how many days with no reply an application is due for a follow-up
@@ -58,7 +60,8 @@ import settings_service
 from models import (BudgetChange, ErrorBody, FeaturesChange, FindBoard, FindResult, Health, JobDetail, JobPage, JobsQuery, PauseRequest, PauseState,
                     RunRequested, ScheduleChange, ScheduleName, SearchPage, SearchSave, SettingsPage, Spend, StatusChange,
                     StatusResult, Summary, TailoringChange)
-from models import Board, FollowUpDays, JobEvent, Stats, Tracking, TrackingSave, UndoRequest, UndoResult
+from models import (Board, FollowUpDays, JobEvent, Stats, TailorEstimate, TailorStart, TailorState, Tracking, TrackingSave, UndoRequest,
+                    UndoResult)
 from scraper_client import ScraperClient
 from settings import Settings, SettingsError, load_settings
 from store import Conflict, Forbidden, Invalid, NotFound, HistoryChanged, PgStore, ProfileChanged, StoreError, TrackingChanged, Unavailable
@@ -201,6 +204,20 @@ def create_app(settings: Settings, store, sessions: Sessions | None = None,
     @protected.get("/jobs/{job_id}/events", response_model=list[JobEvent], responses=ERRORS)
     def job_events(job_id: JobId):
         return store.job_events(job_id)
+
+    # ---- version 3c: tailor this job. The scraper holds every rule (the switch, eligibility, one run at a time, a cooldown per
+    # job, the spending caps); this only carries the page's request and the agreed cost, and shows the answers.
+    @protected.get("/jobs/{job_id}/tailor/estimate", response_model=TailorEstimate, responses=ERRORS)
+    def tailor_estimate(job_id: JobId):
+        return scraper.tailor_estimate(job_id)
+
+    @protected.get("/jobs/{job_id}/tailor", response_model=TailorState, responses=ERRORS)
+    def tailor_status(job_id: JobId):
+        return scraper.tailor_status(job_id)
+
+    @protected.post("/jobs/{job_id}/tailor", response_model=TailorState, responses=ERRORS)
+    def tailor_start(job_id: JobId, start: TailorStart):
+        return scraper.tailor_start(job_id, start.max_cost_usd)
 
     @protected.post("/jobs/{job_id}/undo", response_model=UndoResult, responses=ERRORS)
     def undo_status(job_id: JobId, undo: UndoRequest):

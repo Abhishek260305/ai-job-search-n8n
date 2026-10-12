@@ -1,6 +1,6 @@
 # Dashboard (web UI)
 
-A browser view of everything the pipeline knows, so you do not have to open Postgres, the CLI or Telegram to see where your search stands. **Status: versions 1 and 2 (Jobs, Health with the pause switch, Spend, Settings and Search) are built, tested and in use. Versions 3a (status history, the Kanban board and the numbers) and 3b (notes, contacts and follow-up reminders) are built and tested; 3a runs on the author's server, 3b is not yet installed. The tailor button (3c) is not built.** To open it, see [Open the dashboard](#open-the-dashboard); to add it to an install, see [Turn it on](#turn-it-on). Later versions are listed at the end so the work can be picked up in order.
+A browser view of everything the pipeline knows, so you do not have to open Postgres, the CLI or Telegram to see where your search stands. **Status: versions 1 and 2 (Jobs, Health with the pause switch, Spend, Settings and Search) are built, tested and in use. Version 3 (3a status history, the Kanban board and the numbers; 3b notes, contacts and follow-up reminders; 3c the "Tailor this job" button) is built and tested. 3a, 3b and Undo run on the author's server; 3c is not installed yet.** To open it, see [Open the dashboard](#open-the-dashboard); to add it to an install, see [Turn it on](#turn-it-on). Later versions are listed at the end so the work can be picked up in order.
 
 The dashboard is optional, like every part beyond scoring. The CLI, Telegram and the database keep working exactly as they do today, with or without it.
 
@@ -528,6 +528,23 @@ Three things that all rest on one table, `application_events`: a row each time a
 2. Sync the code, then rebuild the scraper and the dashboard: `docker compose --profile dashboard build scraper dashboard`, `docker compose up -d scraper` (a few seconds without the scraper) and `docker compose --profile dashboard up -d --no-deps dashboard`.
 3. Open a job on the Board, add a note and a follow-up date, and check the Follow up list; `scripts/jobsearch follow-up` shows the same.
 
+## Version 3c: tailor this job
+
+A button in a job's panel that writes a tailored resume and cover letter for **that one job, on request**, whatever the tailoring mode is. So you can set tailoring to **Manual** (Settings, Tailoring: nothing is tailored by the schedule) and still tailor the jobs you pick.
+
+- **The button.** **Tailor this job…** (or **Tailor again…** when files exist) appears for a scored job that is not scam-blocked, filtered out, expired or already applied to. It always asks first.
+- **The confirmation** shows what it costs: **typically about 5 cents, at most the figure the spending guard holds back before it starts** (a draft and a possible revision), what is left of today's and this month's budget, the model, and what it would replace. **Tailor now (up to $X)** sends the "at most" you were shown, and the scraper refuses if it would now be more. A job that scores above your "max score" band with the cover letter off needs no call to Claude and shows "Costs nothing".
+- **The run** happens in the background (about a minute). The panel shows it running, and keeps showing it if you close and reopen the panel or reload the page. When it ends the files, the Board, the numbers and the history refresh, and the result says: ready for review (or ready to apply, if approval is automatic), what it cost, how many of the posting's requirements the resume covers, and anything that needs your attention. Nothing is sent to an employer, and no Telegram message is sent for a run you started yourself.
+- **What stops it, in the scraper (one place, not the page):** the Tailoring switch (off means no tailoring at all: the dialog says how to turn it on) and the emergency pause (paused means nothing spends, this included); the job's eligibility, and **never an application that was already submitted** (its files are not replaced, even if the job row lags behind); **one run at a time** (a second start is refused, not queued); a **cooldown of two minutes** per job, which survives a restart of the scraper because it also reads the application's last update (a double click or a retry cannot pay twice); the **spending caps**, priced at the worst case before anything is spent; and the cost you were shown. The run asks all of that **again inside the tailoring lock** right before it spends (a start never waits in line behind a scheduled run: it stops with nothing spent), and checks that the PDF service answers before paying for a draft. The automatic `daily_limit` and the attempt counting that parks failing jobs belong to the schedule and do not apply to a run you ask for (it never claimed the job, so it leaves those counters alone); the caps do.
+- **The cost shown** is the most the guard holds back (a draft, a possible revision and the fact-check call, each at its worst case); you pay for what is used. The "typical" figure is the median of recent runs. A run that fails after spending says what it cost, and a re-tailor replaces the files, resets an approval or a skip (the dialog says so), and removes an old cover letter if this run has none.
+- **Governance note.** Until version 3c the dashboard could only lower spending. This button is the one place it can start spending Claude money, bounded as above; the page cannot start a run without sending the cost it showed, and the scraper refuses one that would now cost more.
+- **API:** `GET /api/jobs/{id}/tailor/estimate`, `POST /api/jobs/{id}/tailor` `{max_cost_usd?}`, `GET /api/jobs/{id}/tailor` (progress). They call the scraper's `/tailor/estimate`, `/tailor/start` and `/tailor/status`, which are the only new things on the scraper's side. No database change.
+- **The command line has the same thing:** `scripts/jobsearch tailor N`. State of a run is kept in the scraper's memory: a restart of the scraper forgets a finished run's report (not its files).
+
+### Adding version 3c to an existing install
+
+No migration. Sync the code, then rebuild the **scraper first** and the dashboard second (a new dashboard asks the scraper for endpoints an old one does not have yet): `docker compose build scraper dashboard`, `docker compose up -d scraper` (a few seconds without the scraper), then `docker compose --profile dashboard up -d --no-deps dashboard`. To try it: open a scored job, press **Tailor this job…**, read the cost, and cancel; run it only if you want to spend the few cents.
+
 ### Undo
 
 - **What it takes back.** Only the **newest** history entry of a job, and only if it was made **on the dashboard** (a change made with the CLI or Telegram is not offered), the job is still in the status that entry set, the application has not been changed since (for example tailored again, which replaces its files), and the job is not scam-blocked. The **Undo** on a "Marked" message is tied to the very entry that move wrote, so it can never reach an older move; a change that wrote nothing (the same status again) has nothing to undo and shows no button. After an undo the entry before it is the newest, so you can step back more than once.
@@ -589,7 +606,7 @@ The health and spend panels and the pause switch are built (version 2a, above), 
 - **Kanban board** (built, version 3a).
 - **Notes and contacts** (built, version 3b): recruiter name and email, referral, free notes and a follow-up date, on any job.
 - **Follow-up reminders** (built, version 3b): applications with no reply after N days, or a date you set, are listed and highlighted, with an optional section in the Telegram digest.
-- **On-demand tailoring:** a "tailor this job" button for one job even while automatic tailoring is off. It goes through the scraper's existing tailoring path, the budget guard and the daily limit, never around them.
+- **On-demand tailoring** (built, version 3c): a "Tailor this job" button for one job even while automatic tailoring is off. It goes through the same tailoring code and the budget guard, with a cost confirmation, one run at a time and a cooldown per job.
 - **Weekly stats** (built, version 3a, without the split by source): jobs found, shortlisted and applied per week.
 
 ### Version 4 and beyond

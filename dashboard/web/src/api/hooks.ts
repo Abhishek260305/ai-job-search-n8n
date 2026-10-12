@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { toast } from 'sonner'
 import { api, ApiError, toQuery } from '@/api/client'
 import type {
-  Board, UndoResult, BudgetChange, JobEvent, Stats, Tracking, EditableStatus, FeaturesChange, Health, JobDetail, JobPage, JobsParams, Me, PauseState, PipelineStatus, RunRequested,
+  Board, TailorEstimate, TailorState, UndoResult, BudgetChange, JobEvent, Stats, Tracking, EditableStatus, FeaturesChange, Health, JobDetail, JobPage, JobsParams, Me, PauseState, PipelineStatus, RunRequested,
   FindResult, ScheduleChange, ScheduleName, SearchPage, SearchProfileIn, SettingsPage, Spend, StatusResult, Summary, TailoringChange,
 } from '@/api/types'
 import { statusLabel } from '@/lib/status'
@@ -21,6 +21,8 @@ export const keys = {
   stats: ['stats'] as const,
   events: (id: number) => ['events', id] as const,
   tracking: (id: number) => ['tracking', id] as const,
+  tailor: (id: number) => ['tailor', id] as const,
+  tailorEstimate: (id: number) => ['tailor-estimate', id] as const,
 }
 
 export function useMe() {
@@ -179,6 +181,52 @@ function useUndo() {
       },
     }),
   }
+}
+
+/** How a tailoring run of this job is going. Asked again every 3 seconds while it runs, and once when the panel opens. */
+export const TAILOR_POLL_MS = 3000
+
+export function useTailorStatus(id: number | null) {
+  return useQuery({
+    queryKey: keys.tailor(id ?? 0),
+    queryFn: () => api<TailorState>(`/api/jobs/${id}/tailor`),
+    enabled: id !== null,
+    refetchInterval: (query) => (query.state.data?.state === 'running' ? TAILOR_POLL_MS : false),
+  })
+}
+
+/** What tailoring this job would cost and whether it may start: asked when the confirmation opens, and never reused (the budget moves). */
+export function useTailorEstimate(id: number, open: boolean) {
+  return useQuery({
+    queryKey: keys.tailorEstimate(id),
+    queryFn: () => api<TailorEstimate>(`/api/jobs/${id}/tailor/estimate`),
+    enabled: open,
+    gcTime: 0,
+    staleTime: 0,
+  })
+}
+
+/** Starts the run. `agreedUsd` is the most the user was shown: the scraper refuses if it would now be more. */
+export function useStartTailor(id: number) {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (agreedUsd: number) => api<TailorState>(`/api/jobs/${id}/tailor`, { method: 'POST', json: { max_cost_usd: agreedUsd } }),
+    onSuccess: (state) => { client.setQueryData(keys.tailor(id), state) },
+  })
+}
+
+/** What a finished run changes on screen: the job's files and status, the board, the numbers and the history. */
+export function useRefreshAfterTailor() {
+  const client = useQueryClient()
+  return (id: number) =>
+    Promise.all([
+      client.invalidateQueries({ queryKey: keys.job(id) }),
+      client.invalidateQueries({ queryKey: keys.allJobs }),
+      client.invalidateQueries({ queryKey: keys.summary }),
+      client.invalidateQueries({ queryKey: keys.board }),
+      client.invalidateQueries({ queryKey: keys.events(id) }),
+      client.invalidateQueries({ queryKey: keys.spend }),
+    ])
 }
 
 /** The undo of one history entry (the timeline's button). */
