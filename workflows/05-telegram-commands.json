@@ -1,0 +1,105 @@
+{
+  "id": "js-telegram",
+  "name": "05 Telegram commands",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 05 Telegram commands\nEvery minute: asks the service to read new Telegram messages and act on commands from **your chat only** (`/approve 24`, `/skip 24`, `/applied 24`, `/tailor 24`, `/review`, `/status`, `/budget`, `/settings`, `/set ...`; send `/help`). Needs no public URL: it polls.\n\nThis runs 1,440 times a day; n8n prunes old executions after 3 days (see `EXECUTIONS_DATA_MAX_AGE`). **Credentials needed:** none (the service holds the bot token). It does nothing when Telegram is off.",
+        "height": 260,
+        "width": 420,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -330
+      ],
+      "id": "7bb63012-b6cc-59f7-b39e-534212362374",
+      "name": "Notes"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "ab505f12-909c-5b91-ad8f-59115238830d",
+      "name": "Every minute"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/telegram/poll",
+        "options": {
+          "timeout": 600000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "id": "bd0c51ed-6313-51ec-b940-a6a39268a6fa",
+      "name": "Check for commands"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ],
+      "id": "f45ca219-17bc-5a94-a45f-26aa4ddd4c96",
+      "name": "Run on demand"
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [
+        [
+          {
+            "node": "Check for commands",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Check for commands",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

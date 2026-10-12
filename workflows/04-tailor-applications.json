@@ -1,0 +1,99 @@
+{
+  "id": "js-tailor",
+  "name": "04 Tailor applications",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 04 Tailor applications\nStarted by the scheduler (workflow 00), by default every 15 minutes: asks the service to tailor the next shortlisted jobs (3 per run by default). For each job it drafts a resume patch and cover letter, checks them against your resume (two honesty layers), renders the PDFs, stores them in `output/applications/`, and, in review mode, sends them to your Telegram.\n\n**Settings live in the database, not here:** `scripts/jobsearch tailor-settings` (mode, approval, score band, daily limit, cover letter, fact check) or `/settings` in Telegram. In **manual** mode this workflow does nothing.\n\nIt is capped by your spending limits (see docs/budget.md). **Credentials needed:** none (the service holds the keys).",
+        "height": 360,
+        "width": 420,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -420
+      ],
+      "id": "28dcaafd-3d7e-5e71-ad8c-b20efba4d110",
+      "name": "Notes"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/tailor/run",
+        "options": {
+          "timeout": 900000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "id": "6354c23a-a545-5705-aff9-0bbbc78dbc70",
+      "name": "Tailor next jobs",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst results = r.results || [];\nreturn [{ json: {\n  skipped: r.skipped || null,\n  claimed: r.claimed || 0,\n  drafted: results.filter(x => x.status === 'drafted').length,\n  approved: results.filter(x => x.status === 'approved').length,\n  failed: results.filter(x => x.status === 'failed').length,\n  cost_usd: results.reduce((a, x) => a + (x.cost_usd || 0), 0),\n  error: r.error || null,\n} }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ],
+      "id": "f49a75c6-c10a-59ed-8626-76b8644d2957",
+      "name": "Summary"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ],
+      "id": "81be0b09-704c-5164-912d-b00ad1591d90",
+      "name": "Run on demand"
+    }
+  ],
+  "connections": {
+    "Tailor next jobs": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Tailor next jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

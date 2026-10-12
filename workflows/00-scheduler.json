@@ -1,0 +1,170 @@
+{
+  "id": "js-scheduler",
+  "name": "00 Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 00 Scheduler\nEvery 5 minutes: asks the service which stages are due (`POST /schedule/tick`) and starts those workflows (01 collect, 02 score, 03 digest, 04 tailor). **When and how much is a setting, not an edit here:**\n\n```\nscripts/jobsearch schedule                      # what runs when\nscripts/jobsearch schedule set collect --every 6h\nscripts/jobsearch schedule run collect\n```\n\nA stage is claimed (marked as started) before it is launched, so two ticks can never start it twice. Stages whose feature is switched off (tailoring, digest) are left alone and start promptly when switched on. Nothing to configure in this workflow. See docs/customization.md.",
+        "height": 330,
+        "width": 420,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -400
+      ],
+      "id": "7f94ae58-eca2-5733-b2a8-1d322743ee50",
+      "name": "Notes"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "811db4a8-592f-5e49-b75f-7fa803995967",
+      "name": "Every 5 minutes"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/schedule/tick",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "id": "c0f7577b-ea88-5419-ae92-435b5a87ab0b",
+      "name": "What is due?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const due = ($input.first().json.due || []).map(d => ({ json: d }));\nreturn due;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ],
+      "id": "d214f7f5-131a-53b8-8097-309699bbdfd7",
+      "name": "One item per due stage"
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "={{ 'js-' + $json.name }}",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        780,
+        0
+      ],
+      "id": "3baf3332-bab1-51ff-84ae-aa28e32202e4",
+      "name": "Start the workflow"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ],
+      "id": "a03e4b0c-1b9a-502d-ace2-e18e4cadbeb4",
+      "name": "Run on demand"
+    }
+  ],
+  "connections": {
+    "Every 5 minutes": {
+      "main": [
+        [
+          {
+            "node": "What is due?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "What is due?": {
+      "main": [
+        [
+          {
+            "node": "One item per due stage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "One item per due stage": {
+      "main": [
+        [
+          {
+            "node": "Start the workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "What is due?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

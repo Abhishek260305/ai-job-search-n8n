@@ -1,0 +1,350 @@
+{
+  "id": "js-score",
+  "name": "02 Score jobs",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 02 Score jobs\nStarted by the scheduler (workflow 00), by default every 30 minutes: retires expired jobs, claims unscored jobs, asks Claude to score each against your profile, then validates and stores the result.\n\n**The model only reports.** The score, verdict and what happens next are computed by the scraper service (see docs/scoring.md). An invalid reply is counted and retried later; an API error is not.\n\n- **Model and batch size are settings:** `scripts/jobsearch schedule set score --model ... --batch ...`; the *Settings* node reads them.\n\n**Spending is capped.** Before each batch the service reserves the worst-case cost and only claims as many jobs as the monthly and daily caps allow (see docs/budget.md). At a cap this workflow simply does nothing.\n**If Claude does not answer** (an outage), the job's claim is handed back, so an outage never uses up a job's attempts.\n\n**Credentials needed:** a *Header Auth* credential named **Anthropic API key** (Name: `x-api-key`, Value: your key). See docs/workflows.md.",
+        "height": 370,
+        "width": 420,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -440
+      ],
+      "id": "3b89d168-0d8a-5c03-92db-4aef99403c71",
+      "name": "Notes"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://scraper:8000/schedule/score/settings",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "id": "554a316d-12dc-5816-994a-5e5b3bf553b8",
+      "name": "Settings"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/maintenance/sweep",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        0
+      ],
+      "id": "b6af8b87-d512-56c8-b1bd-6588df8f8dee",
+      "name": "Sweep expired",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/jobs/prepare-batch",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ limit: $('Settings').first().json.batch_size, model: $('Settings').first().json.model }) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ],
+      "id": "33375a48-2574-53bb-a982-84d7da782d54",
+      "name": "Prepare batch"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "items",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        960,
+        0
+      ],
+      "id": "301c7037-c8ad-5a53-ac26-2f4e370bfc61",
+      "name": "Split items"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "options": {
+          "timeout": 120000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 1500
+            }
+          }
+        },
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: $('Settings').first().json.model, max_tokens: $json.max_tokens, thinking: { type: 'disabled' }, system: [{ type: 'text', text: $json.system, cache_control: { type: 'ephemeral' } }], messages: [{ role: 'user', content: $json.user }] }) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        0
+      ],
+      "id": "a80f84ec-6112-56f2-9540-d5562b0b99e2",
+      "name": "Ask Claude",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "js-anthropic-key",
+          "name": "Anthropic API key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ Array.isArray($json.content) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1440,
+        0
+      ],
+      "id": "804b7408-b5a8-53e7-90e8-8c3ae09ed3f1",
+      "name": "Got a reply?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://scraper:8000/jobs/' + $('Split items').item.json.job_id + '/score' }}",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model_output: ($json.content || []).filter(b => b.type === 'text').map(b => b.text).join(''), model: $('Settings').first().json.model, usage: $json.usage || {} }) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        -80
+      ],
+      "id": "c2dfd62e-7111-57ee-9c51-9b5c08de80ab",
+      "name": "Record score",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://scraper:8000/jobs/' + $('Split items').item.json.job_id + '/release' }}",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        120
+      ],
+      "id": "43a3147c-166b-5967-8f61-a78a54814548",
+      "name": "Release job (no reply)",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = $input.all().map(i => i.json);\nconst prepared = $('Prepare batch').first().json;\nreturn [{ json: {\n  claimed: prepared.claimed,\n  budget: prepared.budget,\n  scored: out.filter(r => r.status).length,\n  shortlisted: out.filter(r => r.status === 'shortlisted').length,\n  rejected_replies: out.filter(r => r.error || (r.detail && r.detail.errors)).length,\n} }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        -80
+      ],
+      "id": "ddbc7b3a-df6e-58f1-a236-b5d6f8b6f4eb",
+      "name": "Summary"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ],
+      "id": "08773eac-32b3-54ee-a8a6-a3fd4cdaed99",
+      "name": "Run on demand"
+    }
+  ],
+  "connections": {
+    "Settings": {
+      "main": [
+        [
+          {
+            "node": "Sweep expired",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sweep expired": {
+      "main": [
+        [
+          {
+            "node": "Prepare batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare batch": {
+      "main": [
+        [
+          {
+            "node": "Split items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split items": {
+      "main": [
+        [
+          {
+            "node": "Ask Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask Claude": {
+      "main": [
+        [
+          {
+            "node": "Got a reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Got a reply?": {
+      "main": [
+        [
+          {
+            "node": "Record score",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Release job (no reply)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record score": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Settings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

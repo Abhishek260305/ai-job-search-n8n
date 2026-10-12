@@ -1,0 +1,76 @@
+{
+  "_comment": "Example only. Copy to config/resume.json (gitignored) and fill in your own. Follows the JSON Resume shape (jsonresume.org). This JSON is the single source of truth the tailoring step edits; it is rendered to PDF through a fixed template, so the AI never touches layout. Optional: a highlight may carry a 'group' (sub-heading), and 'additional' holds extra one-line items.",
+  "basics": {
+    "name": "Jane Doe",
+    "label": "Backend Engineer",
+    "email": "jane@example.com",
+    "phone": "+00 00000 00000",
+    "location": {
+      "city": "Bengaluru",
+      "countryCode": "IN"
+    },
+    "summary": "Backend engineer with 5 years of experience building data-heavy APIs.",
+    "profiles": [
+      {
+        "network": "LinkedIn",
+        "url": "https://linkedin.com/in/janedoe"
+      },
+      {
+        "network": "GitHub",
+        "url": "https://github.com/janedoe"
+      }
+    ]
+  },
+  "work": [
+    {
+      "id": "work-1",
+      "name": "Example Corp",
+      "position": "Software Engineer",
+      "startDate": "2022-01",
+      "endDate": "",
+      "highlights": [
+        {
+          "id": "w1-b1",
+          "text": "Cut p95 API latency from 900ms to 220ms by redesigning the caching layer.",
+          "group": "Caching layer"
+        },
+        {
+          "id": "w1-b2",
+          "text": "Led migration of 40 services to Kubernetes with zero downtime."
+        }
+      ]
+    }
+  ],
+  "education": [
+    {
+      "institution": "Example University",
+      "area": "Computer Science",
+      "studyType": "B.Tech",
+      "endDate": "2021"
+    }
+  ],
+  "skills": [
+    {
+      "name": "Languages",
+      "keywords": [
+        "Python",
+        "Go",
+        "SQL"
+      ]
+    },
+    {
+      "name": "Infrastructure",
+      "keywords": [
+        "Docker",
+        "Kubernetes",
+        "PostgreSQL"
+      ]
+    }
+  ],
+  "additional": [
+    {
+      "id": "add-1",
+      "text": "Mentored 10+ junior engineers through an internal engineering bootcamp."
+    }
+  ]
+}

@@ -1,0 +1,160 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/init-env.sh to create .env}
+      POSTGRES_DB: n8n
+      TZ: ${TZ}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./postgres/schema.sql:/schema/schema.sql:ro
+      - ./postgres/migrate.sh:/migrate.sh:ro
+      - ./postgres/migrations:/migrations:ro
+      - ./postgres/tests:/tests:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d n8n"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [jobnet]
+
+  scraper:
+    build: ./scraper
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ}
+      # Optional: one Apify account per LinkedIn actor (see docs/sources.md).
+      APIFY_TOKEN_CURIOUS: ${APIFY_TOKEN_CURIOUS:-}
+      APIFY_TOKEN_CHEAP: ${APIFY_TOKEN_CHEAP:-}
+      APIFY_TOKEN_BEBITY: ${APIFY_TOKEN_BEBITY:-}
+      PROFILE_PATH: /config/profile.json
+      RESUME_PATH: /config/resume.json
+      OUTPUT_DIR: /output
+      GOTENBERG_URL: http://gotenberg:3000
+      # Tailoring calls the model and Telegram from this service (see docs/tailoring.md).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      DB_HOST: postgres
+      DB_NAME: jobsearch
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./config:/config:ro   # your profile.json / resume.json live here (gitignored)
+      - ./output:/output      # tailored resumes, cover letters and review notes (gitignored)
+    depends_on:
+      - gotenberg
+    networks: [jobnet]
+
+  # Headless Chromium that turns the HTML resume/cover letter into PDFs. Internal network only.
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks: [jobnet]
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.42.6
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Bound to localhost only; reach the UI through an SSH tunnel for now.
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: ${POSTGRES_USER}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?run scripts/init-env.sh to create .env}
+      N8N_HOST: localhost
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: "false"
+      WEBHOOK_URL: http://localhost:5678/
+      GENERIC_TIMEZONE: ${TZ}
+      TZ: ${TZ}
+      N8N_RUNNERS_ENABLED: "true"
+      EXECUTIONS_DATA_PRUNE: "true"
+      EXECUTIONS_DATA_MAX_AGE: 72      # hours; the scheduler and Telegram poll run many times a day
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflows:/workflows:ro   # workflow JSON files, importable with the n8n CLI
+    networks: [jobnet]
+
+  # The web dashboard is optional: COMPOSE_PROFILES=dashboard in .env turns on the next two services
+  # (docs/dashboard.md). Their variables use ":-", not ":?": compose checks required variables even for services
+  # whose profile is off, which would break `up` for everyone without a dashboard. db-init.sh and the dashboard
+  # refuse to start, naming the variable, when one is missing.
+
+  # Gives the dashboard's database role its password from .env, then exits. It runs on every `up`, so a changed
+  # password applies.
+  dashboard-db-init:
+    image: postgres:16-alpine
+    profiles: [dashboard]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: jobsearch
+      DASHBOARD_DB_PASSWORD: ${DASHBOARD_DB_PASSWORD:-}
+    volumes:
+      - ./dashboard/db-init.sh:/db-init.sh:ro
+    command: ["sh", "/db-init.sh"]
+    networks: [jobnet]
+
+  # Bound to localhost only: open it through scripts/tunnel.sh. It connects as jobsearch_dashboard, which can read
+  # three views and call three functions (migration 014), and it only reads ./output.
+  dashboard:
+    build:
+      context: ./dashboard
+      args:
+        VITE_REPO_URL: ${DASHBOARD_REPO_URL:-}
+    profiles: [dashboard]
+    restart: unless-stopped
+    depends_on:
+      dashboard-db-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8080}:8080"
+    environment:
+      TZ: ${TZ}
+      DB_HOST: postgres
+      DB_NAME: jobsearch
+      DB_USER: jobsearch_dashboard
+      DB_PASSWORD: ${DASHBOARD_DB_PASSWORD:-}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+      DASHBOARD_SECRET: ${DASHBOARD_SECRET:-}
+      DASHBOARD_ALLOWED_HOSTS: ${DASHBOARD_ALLOWED_HOSTS:-}
+      # the settings page changes things through the scraper's own validated endpoints (inside this network only)
+      SCRAPER_URL: http://scraper:8000
+    volumes:
+      - ./output:/output:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 256m
+    pids_limit: 128
+    networks: [jobnet]
+
+volumes:
+  pgdata:
+  n8n_data:
+
+networks:
+  jobnet:

@@ -1,0 +1,182 @@
+{
+  "id": "js-digest",
+  "name": "03 Daily digest",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 03 Daily digest\nStarted by the scheduler (workflow 00) once a day at the time you set (default 08:00): sends your new shortlisted matches to Telegram, then marks them as sent so you never get the same job twice.\n\nPostings flagged *medium risk*, with a near deadline, or with an unverified eligibility gate carry a warning line in the message. The message ends with your Claude spend for the month, and a warning is sent on its own when spend is high or the cap has paused scoring.\n\n**Before activating:** create a *Telegram API* credential named **Telegram bot** and set your numeric **Chat ID** in the *Send to Telegram* node. See docs/workflows.md.",
+        "height": 330,
+        "width": 420,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -400
+      ],
+      "id": "f6a4a8a9-a5fd-502e-88c4-b5933d1e9760",
+      "name": "Notes"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://scraper:8000/digest",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "id": "cd16d933-e08d-51ef-a466-01b4f700ad9b",
+      "name": "Build digest"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.text }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        520,
+        0
+      ],
+      "id": "72384838-fc62-5f25-878a-e49dc694cf87",
+      "name": "Anything new?"
+    },
+    {
+      "parameters": {
+        "chatId": "REPLACE_WITH_YOUR_CHAT_ID",
+        "text": "={{ $json.html }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        780,
+        -60
+      ],
+      "id": "b1abfb17-913b-5f7a-8063-42d1c35b0a5c",
+      "name": "Send to Telegram",
+      "credentials": {
+        "telegramApi": {
+          "id": "js-telegram-bot",
+          "name": "Telegram bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/digest/sent",
+        "options": {
+          "timeout": 60000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ ids: $('Build digest').first().json.ids }) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        -60
+      ],
+      "id": "51d541e1-6d1b-58e4-a290-504a8d753ccb",
+      "name": "Mark as sent"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ],
+      "id": "a942c6de-ecad-5f65-87bb-9b16e9ca03d4",
+      "name": "Run on demand"
+    }
+  ],
+  "connections": {
+    "Build digest": {
+      "main": [
+        [
+          {
+            "node": "Anything new?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anything new?": {
+      "main": [
+        [
+          {
+            "node": "Send to Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send to Telegram": {
+      "main": [
+        [
+          {
+            "node": "Mark as sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Build digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

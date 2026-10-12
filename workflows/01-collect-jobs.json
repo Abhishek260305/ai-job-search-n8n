@@ -1,0 +1,190 @@
+{
+  "id": "js-collect",
+  "name": "01 Collect jobs",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 01 Collect jobs\nStarted by the scheduler (workflow 00) on the schedule you set (default every 6 hours): asks the service for the next slice of (title, location, source) searches, scrapes each one, then ingests the results.\n\n**Ingest = safety check + dedupe + free rule filters** (no AI is called here).\n\n- **Schedule and slice size are settings, not edits here:** `scripts/jobsearch schedule` (see docs/customization.md).\n- What to search for lives in your search settings (`scripts/jobsearch search-profile apply`).\n\n**Credentials needed:** none.",
+        "height": 300,
+        "width": 420,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -330
+      ],
+      "id": "b94c6fc0-1f5d-5f71-9c9a-03d51097536c",
+      "name": "Notes"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://scraper:8000/pipeline/plan",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "id": "5edae87b-de2e-583b-ace5-dd09f5056df2",
+      "name": "Plan this run"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "requests",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        520,
+        0
+      ],
+      "id": "818490a7-a356-5444-b7c9-fee927bf519e",
+      "name": "Split requests"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://scraper:8000' + $json.endpoint }}",
+        "options": {
+          "timeout": 900000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 8000
+            }
+          }
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        780,
+        0
+      ],
+      "id": "dfddc73a-5e27-5680-9eb5-8685d81de632",
+      "name": "Scrape",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/jobs/ingest",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ jobs: $json.jobs || [] }) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        0
+      ],
+      "id": "429e69ee-475e-577b-ae70-590f90fa305d",
+      "name": "Ingest",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ingests = $input.all().map(i => i.json);\nconst scrapes = $('Scrape').all().map(i => i.json);\nconst total = { received: 0, new: 0, seen: 0, kept: 0, filtered_out: 0, scam_blocked: 0, invalid: 0 };\nfor (const r of ingests) for (const k in total) total[k] += Number(r[k] || 0);\nconst skipped = scrapes.filter(s => s.skipped).map(s => s.skipped);\nconst errors = scrapes.filter(s => s.error || (s.errors && s.errors.length))\n  .map(s => (typeof s.error === 'string' ? s.error : (s.error && s.error.message)) || JSON.stringify(s.errors));\nreturn [{ json: { ...total, searches: scrapes.length, scrape_errors: errors, skipped_by_budget: skipped } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        0
+      ],
+      "id": "700d6ab0-46fa-59a1-8db8-9f8ee29c16b7",
+      "name": "Summary"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ],
+      "id": "5d8363df-c169-5894-9a55-ec66a0b5153c",
+      "name": "Run on demand"
+    }
+  ],
+  "connections": {
+    "Plan this run": {
+      "main": [
+        [
+          {
+            "node": "Split requests",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split requests": {
+      "main": [
+        [
+          {
+            "node": "Scrape",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape": {
+      "main": [
+        [
+          {
+            "node": "Ingest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ingest": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Plan this run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

@@ -1,0 +1,72 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pub
+*.p12
+*.pfx
+*.ppk
+*.kdbx
+id_rsa*
+id_ed25519*
+id_ecdsa*
+ssh-key-*
+
+# Personal data (keep only the *.example.* versions in git)
+config/resume.json
+config/profile.json
+config/search.json
+config/search.json.before-pull*
+config/.draft/
+config/.search.*.tmp
+documents/
+output/
+backups/
+# database dumps (the migrations under postgres/ are the only .sql files that belong in git)
+*.sql
+!postgres/**/*.sql
+*.sql.gz
+*.dump
+# a resume, a LinkedIn export or a job export that landed in the repo folder by mistake
+*.pdf
+*.docx
+*.zip
+LinkedInDataExport*/
+Basic_LinkedIn*/
+Complete_LinkedIn*/
+jobs*.csv
+export*.csv
+
+# Internal design notes and plans (kept locally, not published)
+docs/superpowers/
+.superpowers/
+
+# Local/OS noise
+.DS_Store
+._*
+*.log
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.tsbuildinfo
+coverage/
+.vscode/
+.idea/
+*.tmp
+*.bak
+*.orig
+node_modules/
+dashboard/web/dist/
+
+# n8n exports must never contain credentials: review before committing
+workflows/*.credentials.json
+workflows/*.export.json
+
+# Claude Code local settings
+.claude/settings.local.json

@@ -1,0 +1,5101 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "jobsearch dashboard",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "summary": "Health",
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/login": {
+      "post": {
+        "summary": "Login",
+        "operationId": "login_api_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/logout": {
+      "post": {
+        "summary": "Logout",
+        "operationId": "logout_api_logout_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
+    "/api/me": {
+      "get": {
+        "summary": "Me",
+        "operationId": "me_api_me_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/summary": {
+      "get": {
+        "summary": "Summary",
+        "operationId": "summary_api_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Summary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "summary": "Jobs",
+        "operationId": "jobs_api_jobs_get",
+        "parameters": [
+          {
+            "name": "tab",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "shortlisted",
+                "applied",
+                "scored",
+                "filtered",
+                "scam",
+                "all"
+              ],
+              "type": "string",
+              "default": "shortlisted",
+              "title": "Tab"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "new",
+                  "filtered_out",
+                  "scam_blocked",
+                  "scored",
+                  "shortlisted",
+                  "tailored",
+                  "drafted",
+                  "approved",
+                  "applied",
+                  "in_progress",
+                  "interview",
+                  "offer",
+                  "rejected",
+                  "withdrawn",
+                  "skipped",
+                  "expired"
+                ],
+                "type": "string"
+              },
+              "maxItems": 16,
+              "title": "Status"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "indeed",
+                  "naukri",
+                  "linkedin",
+                  "linkedin_apify",
+                  "glassdoor",
+                  "ziprecruiter",
+                  "google",
+                  "greenhouse",
+                  "lever",
+                  "ashby",
+                  "workable",
+                  "smartrecruiters",
+                  "remotive",
+                  "remoteok",
+                  "weworkremotely",
+                  "himalayas",
+                  "arbeitnow"
+                ],
+                "type": "string"
+              },
+              "maxItems": 17,
+              "title": "Source"
+            }
+          },
+          {
+            "name": "min_score",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 100,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Score"
+            }
+          },
+          {
+            "name": "remote",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Remote"
+            }
+          },
+          {
+            "name": "posted_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 365,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Posted Days"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "score",
+                "posted",
+                "first_seen",
+                "company",
+                "title",
+                "status"
+              ],
+              "type": "string",
+              "default": "score",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string",
+              "default": "desc",
+              "title": "Order"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000,
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "get": {
+        "summary": "Job",
+        "operationId": "job_api_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDetail"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/status": {
+      "patch": {
+        "summary": "Set Status",
+        "operationId": "set_status_api_jobs__job_id__status_patch",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Job Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatusChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/files/{kind}": {
+      "get": {
+        "summary": "Application File",
+        "operationId": "application_file_api_jobs__job_id__files__kind__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Job Id"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "resume",
+                "cover_letter"
+              ],
+              "type": "string",
+              "title": "Kind"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/pdf": {}
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/export.csv": {
+      "get": {
+        "summary": "Export Csv",
+        "operationId": "export_csv_api_export_csv_get",
+        "parameters": [
+          {
+            "name": "tab",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "shortlisted",
+                "applied",
+                "scored",
+                "filtered",
+                "scam",
+                "all"
+              ],
+              "type": "string",
+              "default": "shortlisted",
+              "title": "Tab"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "new",
+                  "filtered_out",
+                  "scam_blocked",
+                  "scored",
+                  "shortlisted",
+                  "tailored",
+                  "drafted",
+                  "approved",
+                  "applied",
+                  "in_progress",
+                  "interview",
+                  "offer",
+                  "rejected",
+                  "withdrawn",
+                  "skipped",
+                  "expired"
+                ],
+                "type": "string"
+              },
+              "maxItems": 16,
+              "title": "Status"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "indeed",
+                  "naukri",
+                  "linkedin",
+                  "linkedin_apify",
+                  "glassdoor",
+                  "ziprecruiter",
+                  "google",
+                  "greenhouse",
+                  "lever",
+                  "ashby",
+                  "workable",
+                  "smartrecruiters",
+                  "remotive",
+                  "remoteok",
+                  "weworkremotely",
+                  "himalayas",
+                  "arbeitnow"
+                ],
+                "type": "string"
+              },
+              "maxItems": 17,
+              "title": "Source"
+            }
+          },
+          {
+            "name": "min_score",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 100,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Score"
+            }
+          },
+          {
+            "name": "remote",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Remote"
+            }
+          },
+          {
+            "name": "posted_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 365,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Posted Days"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "score",
+                "posted",
+                "first_seen",
+                "company",
+                "title",
+                "status"
+              ],
+              "type": "string",
+              "default": "score",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string",
+              "default": "desc",
+              "title": "Order"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 10000,
+              "minimum": 1,
+              "default": 1,
+              "title": "Page"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 50,
+              "title": "Page Size"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "text/csv": {}
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pipeline": {
+      "get": {
+        "summary": "Pipeline",
+        "operationId": "pipeline_api_pipeline_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/spend": {
+      "get": {
+        "summary": "Spend",
+        "operationId": "spend_api_spend_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Spend"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pipeline/pause": {
+      "post": {
+        "summary": "Pause",
+        "operationId": "pause_api_pipeline_pause_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PauseRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PauseState"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pipeline/resume": {
+      "post": {
+        "summary": "Resume",
+        "operationId": "resume_api_pipeline_resume_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PauseState"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "summary": "Get Settings",
+        "operationId": "get_settings_api_settings_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/schedules/{name}": {
+      "patch": {
+        "summary": "Change Schedule",
+        "operationId": "change_schedule_api_settings_schedules__name__patch",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "collect",
+                "score",
+                "tailor",
+                "digest"
+              ],
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleChange"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/schedules/{name}/run": {
+      "post": {
+        "summary": "Run Schedule",
+        "operationId": "run_schedule_api_settings_schedules__name__run_post",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "enum": [
+                "collect",
+                "score",
+                "tailor",
+                "digest"
+              ],
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunRequested"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/features": {
+      "patch": {
+        "summary": "Change Features",
+        "operationId": "change_features_api_settings_features_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeaturesChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/tailoring": {
+      "patch": {
+        "summary": "Change Tailoring",
+        "operationId": "change_tailoring_api_settings_tailoring_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TailoringChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/budget": {
+      "patch": {
+        "summary": "Lower Budget",
+        "operationId": "lower_budget_api_settings_budget_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/search": {
+      "get": {
+        "summary": "Get Search",
+        "operationId": "get_search_api_search_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "summary": "Save Search",
+        "operationId": "save_search_api_search_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchSave"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPage"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/search/boards/find": {
+      "post": {
+        "summary": "Find Board",
+        "operationId": "find_board_api_search_boards_find_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FindBoard"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FindResult"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Alert": {
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "bad",
+              "warn"
+            ],
+            "title": "Level"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "paused",
+              "claude_blocked",
+              "claude_warn",
+              "apify_blocked",
+              "scoring_stalled",
+              "parked",
+              "sources_failing",
+              "schedule_overdue"
+            ],
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "code",
+          "message"
+        ],
+        "title": "Alert"
+      },
+      "ApifySpend": {
+        "properties": {
+          "month_spent": {
+            "type": "number",
+            "title": "Month Spent"
+          },
+          "day_spent": {
+            "type": "number",
+            "title": "Day Spent"
+          },
+          "monthly_cap": {
+            "type": "number",
+            "title": "Monthly Cap"
+          },
+          "daily_cap": {
+            "type": "number",
+            "title": "Daily Cap"
+          },
+          "month_remaining": {
+            "type": "number",
+            "title": "Month Remaining"
+          },
+          "day_remaining": {
+            "type": "number",
+            "title": "Day Remaining"
+          },
+          "blocked": {
+            "type": "boolean",
+            "title": "Blocked"
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "month_spent",
+          "day_spent",
+          "monthly_cap",
+          "daily_cap",
+          "month_remaining",
+          "day_remaining",
+          "blocked",
+          "blocked_reason"
+        ],
+        "title": "ApifySpend"
+      },
+      "BoardEntry": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "slug"
+        ],
+        "title": "BoardEntry"
+      },
+      "BoardMatch": {
+        "properties": {
+          "system": {
+            "type": "string",
+            "enum": [
+              "greenhouse",
+              "lever",
+              "ashby",
+              "workable",
+              "smartrecruiters"
+            ],
+            "title": "System"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "jobs": {
+            "type": "integer",
+            "title": "Jobs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "system",
+          "slug",
+          "jobs"
+        ],
+        "title": "BoardMatch"
+      },
+      "BudgetCaps": {
+        "properties": {
+          "monthly_cap_usd": {
+            "type": "number",
+            "title": "Monthly Cap Usd"
+          },
+          "daily_cap_usd": {
+            "type": "number",
+            "title": "Daily Cap Usd"
+          },
+          "warn_pct": {
+            "type": "integer",
+            "title": "Warn Pct"
+          },
+          "apify_monthly_cap_usd": {
+            "type": "number",
+            "title": "Apify Monthly Cap Usd"
+          },
+          "apify_daily_cap_usd": {
+            "type": "number",
+            "title": "Apify Daily Cap Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "monthly_cap_usd",
+          "daily_cap_usd",
+          "warn_pct",
+          "apify_monthly_cap_usd",
+          "apify_daily_cap_usd"
+        ],
+        "title": "BudgetCaps"
+      },
+      "BudgetChange": {
+        "properties": {
+          "monthly_cap_usd": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ],
+                "ge": 0,
+                "le": 100000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Cap Usd"
+          },
+          "daily_cap_usd": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ],
+                "ge": 0,
+                "le": 100000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Cap Usd"
+          },
+          "apify_monthly_cap_usd": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ],
+                "ge": 0,
+                "le": 100000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apify Monthly Cap Usd"
+          },
+          "apify_daily_cap_usd": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ],
+                "ge": 0,
+                "le": 100000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apify Daily Cap Usd"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "BudgetChange",
+        "description": "New caps. Each may only be lower than (or equal to) the current one; see settings_service.lower_only."
+      },
+      "ByStatus": {
+        "properties": {
+          "applied": {
+            "type": "integer",
+            "title": "Applied"
+          },
+          "in_progress": {
+            "type": "integer",
+            "title": "In Progress"
+          },
+          "interview": {
+            "type": "integer",
+            "title": "Interview"
+          },
+          "offer": {
+            "type": "integer",
+            "title": "Offer"
+          },
+          "rejected": {
+            "type": "integer",
+            "title": "Rejected"
+          },
+          "withdrawn": {
+            "type": "integer",
+            "title": "Withdrawn"
+          },
+          "not_applied": {
+            "type": "integer",
+            "title": "Not Applied"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "in_progress",
+          "interview",
+          "offer",
+          "rejected",
+          "withdrawn",
+          "not_applied"
+        ],
+        "title": "ByStatus",
+        "description": "The donut: the current status of everything submitted, plus the shortlist as `not_applied`."
+      },
+      "Cards": {
+        "properties": {
+          "found": {
+            "type": "integer",
+            "title": "Found"
+          },
+          "shortlisted": {
+            "type": "integer",
+            "title": "Shortlisted"
+          },
+          "new_this_week": {
+            "type": "integer",
+            "title": "New This Week"
+          },
+          "applied": {
+            "type": "integer",
+            "title": "Applied"
+          },
+          "in_progress": {
+            "type": "integer",
+            "title": "In Progress"
+          },
+          "interview": {
+            "type": "integer",
+            "title": "Interview"
+          },
+          "offer": {
+            "type": "integer",
+            "title": "Offer"
+          },
+          "rejected": {
+            "type": "integer",
+            "title": "Rejected"
+          },
+          "withdrawn": {
+            "type": "integer",
+            "title": "Withdrawn"
+          }
+        },
+        "type": "object",
+        "required": [
+          "found",
+          "shortlisted",
+          "new_this_week",
+          "applied",
+          "in_progress",
+          "interview",
+          "offer",
+          "rejected",
+          "withdrawn"
+        ],
+        "title": "Cards"
+      },
+      "ClaudeSpend": {
+        "properties": {
+          "month_spent": {
+            "type": "number",
+            "title": "Month Spent"
+          },
+          "day_spent": {
+            "type": "number",
+            "title": "Day Spent"
+          },
+          "monthly_cap": {
+            "type": "number",
+            "title": "Monthly Cap"
+          },
+          "daily_cap": {
+            "type": "number",
+            "title": "Daily Cap"
+          },
+          "month_remaining": {
+            "type": "number",
+            "title": "Month Remaining"
+          },
+          "day_remaining": {
+            "type": "number",
+            "title": "Day Remaining"
+          },
+          "warn": {
+            "type": "boolean",
+            "title": "Warn"
+          },
+          "warn_pct": {
+            "type": "integer",
+            "title": "Warn Pct"
+          },
+          "blocked": {
+            "type": "boolean",
+            "title": "Blocked"
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          },
+          "month_start": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Month Start"
+          }
+        },
+        "type": "object",
+        "required": [
+          "month_spent",
+          "day_spent",
+          "monthly_cap",
+          "daily_cap",
+          "month_remaining",
+          "day_remaining",
+          "warn",
+          "warn_pct",
+          "blocked",
+          "blocked_reason",
+          "month_start"
+        ],
+        "title": "ClaudeSpend"
+      },
+      "DailySpend": {
+        "properties": {
+          "day": {
+            "type": "string",
+            "format": "date",
+            "title": "Day"
+          },
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "purpose": {
+            "type": "string",
+            "title": "Purpose"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          }
+        },
+        "type": "object",
+        "required": [
+          "day",
+          "provider",
+          "purpose",
+          "calls",
+          "cost_usd"
+        ],
+        "title": "DailySpend"
+      },
+      "ErrorBody": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          },
+          "current_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "new",
+                  "filtered_out",
+                  "scam_blocked",
+                  "scored",
+                  "shortlisted",
+                  "tailored",
+                  "drafted",
+                  "approved",
+                  "applied",
+                  "in_progress",
+                  "interview",
+                  "offer",
+                  "rejected",
+                  "withdrawn",
+                  "skipped",
+                  "expired"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "ErrorBody"
+      },
+      "FeatureFlags": {
+        "properties": {
+          "tailoring": {
+            "type": "boolean",
+            "title": "Tailoring"
+          },
+          "telegram": {
+            "type": "boolean",
+            "title": "Telegram"
+          },
+          "digest": {
+            "type": "boolean",
+            "title": "Digest"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tailoring",
+          "telegram",
+          "digest"
+        ],
+        "title": "FeatureFlags"
+      },
+      "FeatureSettings": {
+        "properties": {
+          "flags": {
+            "$ref": "#/components/schemas/FeatureFlags"
+          },
+          "effective": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FeatureStatus"
+            },
+            "propertyNames": {
+              "enum": [
+                "tailoring",
+                "telegram",
+                "digest"
+              ]
+            },
+            "type": "object",
+            "title": "Effective"
+          },
+          "approval": {
+            "type": "string",
+            "title": "Approval"
+          },
+          "approval_effective": {
+            "type": "string",
+            "title": "Approval Effective"
+          }
+        },
+        "type": "object",
+        "required": [
+          "flags",
+          "effective",
+          "approval",
+          "approval_effective"
+        ],
+        "title": "FeatureSettings"
+      },
+      "FeatureStatus": {
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "on",
+          "reason"
+        ],
+        "title": "FeatureStatus"
+      },
+      "FeaturesChange": {
+        "properties": {
+          "tailoring": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tailoring"
+          },
+          "telegram": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Telegram"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Digest"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "FeaturesChange"
+      },
+      "FindBoard": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "FindBoard"
+      },
+      "FindResult": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "tried": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tried"
+          },
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/BoardMatch"
+            },
+            "type": "array",
+            "title": "Matches"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "tried",
+          "matches"
+        ],
+        "title": "FindResult"
+      },
+      "FunnelStep": {
+        "properties": {
+          "step": {
+            "type": "string",
+            "title": "Step"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "step",
+          "count"
+        ],
+        "title": "FunnelStep"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "Health": {
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "paused": {
+            "$ref": "#/components/schemas/PauseState"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleRow"
+            },
+            "type": "array",
+            "title": "Schedules"
+          },
+          "queue": {
+            "$ref": "#/components/schemas/Queue"
+          },
+          "parked": {
+            "$ref": "#/components/schemas/Parked"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/Sources"
+          },
+          "alerts": {
+            "items": {
+              "$ref": "#/components/schemas/Alert"
+            },
+            "type": "array",
+            "title": "Alerts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_at",
+          "paused",
+          "timezone",
+          "schedules",
+          "queue",
+          "parked",
+          "sources",
+          "alerts"
+        ],
+        "title": "Health"
+      },
+      "JobDetail": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "is_remote": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Remote"
+          },
+          "salary_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary Min"
+          },
+          "salary_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary Max"
+          },
+          "salary_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary Currency"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          },
+          "scores": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scores"
+          },
+          "scam_risk": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scam Risk"
+          },
+          "job_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Job Status"
+          },
+          "filter_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter Reason"
+          },
+          "posted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Posted At"
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Seen"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline"
+          },
+          "closing_soon": {
+            "type": "boolean",
+            "title": "Closing Soon"
+          },
+          "application_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "new",
+                  "filtered_out",
+                  "scam_blocked",
+                  "scored",
+                  "shortlisted",
+                  "tailored",
+                  "drafted",
+                  "approved",
+                  "applied",
+                  "in_progress",
+                  "interview",
+                  "offer",
+                  "rejected",
+                  "withdrawn",
+                  "skipped",
+                  "expired"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Status"
+          },
+          "applied_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At"
+          },
+          "needs_attention": {
+            "type": "boolean",
+            "title": "Needs Attention"
+          },
+          "has_resume": {
+            "type": "boolean",
+            "title": "Has Resume"
+          },
+          "has_cover_letter": {
+            "type": "boolean",
+            "title": "Has Cover Letter"
+          },
+          "pipeline_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Pipeline Status"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "apply_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apply Url"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "canonical_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Url"
+          },
+          "score_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Reason"
+          },
+          "strengths": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strengths"
+          },
+          "gaps": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gaps"
+          },
+          "gates": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gates"
+          },
+          "yoe_min": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yoe Min"
+          },
+          "yoe_max": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Yoe Max"
+          },
+          "scam_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scam Score"
+          },
+          "scam_flags": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scam Flags"
+          },
+          "posting_language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Posting Language"
+          },
+          "variant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "review_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Note"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "attention_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attention Reason"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "sources_detail": {
+            "items": {
+              "$ref": "#/components/schemas/JobSource"
+            },
+            "type": "array",
+            "title": "Sources Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "company",
+          "location",
+          "is_remote",
+          "salary_min",
+          "salary_max",
+          "salary_currency",
+          "score",
+          "verdict",
+          "scores",
+          "scam_risk",
+          "job_status",
+          "filter_reason",
+          "posted_at",
+          "first_seen",
+          "last_seen",
+          "deadline",
+          "closing_soon",
+          "application_status",
+          "applied_at",
+          "needs_attention",
+          "has_resume",
+          "has_cover_letter",
+          "pipeline_status",
+          "sources",
+          "apply_url",
+          "description",
+          "canonical_url",
+          "score_reason",
+          "strengths",
+          "gaps",
+          "gates",
+          "yoe_min",
+          "yoe_max",
+          "scam_score",
+          "scam_flags",
+          "posting_language",
+          "variant",
+          "notes",
+          "review_note",
+          "reviewed_at",
+          "attention_reason",
+          "cost_usd",
+          "model",
+          "sources_detail"
+        ],
+        "title": "JobDetail",
+        "description": "v_dashboard_job_detail plus every listing of the job."
+      },
+      "JobPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobRow"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "page": {
+            "type": "integer",
+            "title": "Page"
+          },
+          "page_size": {
+            "type": "integer",
+            "title": "Page Size"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "page",
+          "page_size"
+        ],
+        "title": "JobPage"
+      },
+      "JobRow": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "location": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Location"
+          },
+          "is_remote": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Remote"
+          },
+          "salary_min": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary Min"
+          },
+          "salary_max": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary Max"
+          },
+          "salary_currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salary Currency"
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verdict"
+          },
+          "scores": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scores"
+          },
+          "scam_risk": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scam Risk"
+          },
+          "job_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Job Status"
+          },
+          "filter_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter Reason"
+          },
+          "posted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Posted At"
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Seen"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline"
+          },
+          "closing_soon": {
+            "type": "boolean",
+            "title": "Closing Soon"
+          },
+          "application_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "new",
+                  "filtered_out",
+                  "scam_blocked",
+                  "scored",
+                  "shortlisted",
+                  "tailored",
+                  "drafted",
+                  "approved",
+                  "applied",
+                  "in_progress",
+                  "interview",
+                  "offer",
+                  "rejected",
+                  "withdrawn",
+                  "skipped",
+                  "expired"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Application Status"
+          },
+          "applied_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At"
+          },
+          "needs_attention": {
+            "type": "boolean",
+            "title": "Needs Attention"
+          },
+          "has_resume": {
+            "type": "boolean",
+            "title": "Has Resume"
+          },
+          "has_cover_letter": {
+            "type": "boolean",
+            "title": "Has Cover Letter"
+          },
+          "pipeline_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Pipeline Status"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "apply_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apply Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "company",
+          "location",
+          "is_remote",
+          "salary_min",
+          "salary_max",
+          "salary_currency",
+          "score",
+          "verdict",
+          "scores",
+          "scam_risk",
+          "job_status",
+          "filter_reason",
+          "posted_at",
+          "first_seen",
+          "last_seen",
+          "deadline",
+          "closing_soon",
+          "application_status",
+          "applied_at",
+          "needs_attention",
+          "has_resume",
+          "has_cover_letter",
+          "pipeline_status",
+          "sources",
+          "apply_url"
+        ],
+        "title": "JobRow",
+        "description": "One row of v_dashboard_jobs."
+      },
+      "JobSource": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "apply_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Apply Url"
+          },
+          "first_seen": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Seen"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "url",
+          "apply_url",
+          "first_seen",
+          "last_seen"
+        ],
+        "title": "JobSource"
+      },
+      "LoginBody": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "maxLength": 1024,
+            "title": "Password"
+          }
+        },
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "title": "LoginBody"
+      },
+      "Me": {
+        "properties": {
+          "authenticated": {
+            "type": "boolean",
+            "title": "Authenticated"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "authenticated",
+          "expires_at"
+        ],
+        "title": "Me"
+      },
+      "ModelSpend": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "title": "Provider"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "title": "Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "title": "Output Tokens"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "model",
+          "calls",
+          "cost_usd",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "title": "ModelSpend"
+      },
+      "Parked": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ParkedItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "total",
+          "items"
+        ],
+        "title": "Parked"
+      },
+      "ParkedItem": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "score",
+              "tailor"
+            ],
+            "title": "Stage"
+          },
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "claims": {
+            "type": "integer",
+            "title": "Claims"
+          },
+          "strikes": {
+            "type": "integer",
+            "title": "Strikes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "stage",
+          "job_id",
+          "title",
+          "company",
+          "claims",
+          "strikes"
+        ],
+        "title": "ParkedItem"
+      },
+      "PauseRequest": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "PauseRequest"
+      },
+      "PauseState": {
+        "properties": {
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          },
+          "paused_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused At"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "paused",
+          "paused_at",
+          "reason"
+        ],
+        "title": "PauseState"
+      },
+      "Queue": {
+        "properties": {
+          "waiting_to_score": {
+            "type": "integer",
+            "title": "Waiting To Score"
+          },
+          "waiting_over_3h": {
+            "type": "integer",
+            "title": "Waiting Over 3H"
+          },
+          "last_scored_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Scored At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "waiting_to_score",
+          "waiting_over_3h",
+          "last_scored_at"
+        ],
+        "title": "Queue"
+      },
+      "RunRequested": {
+        "properties": {
+          "requested": {
+            "type": "string",
+            "enum": [
+              "collect",
+              "score",
+              "tailor",
+              "digest"
+            ],
+            "title": "Requested"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "requested",
+          "note"
+        ],
+        "title": "RunRequested"
+      },
+      "ScheduleChange": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "every_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Every Minutes"
+          },
+          "at_time": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 5
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Time"
+          },
+          "batch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch"
+          },
+          "board_batch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Board Batch"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "ScheduleChange"
+      },
+      "ScheduleRow": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "every_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Every Minutes"
+          },
+          "at_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Time"
+          },
+          "batch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "overdue": {
+            "type": "boolean",
+            "title": "Overdue"
+          },
+          "feature_off": {
+            "type": "boolean",
+            "title": "Feature Off"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "enabled",
+          "every_minutes",
+          "at_time",
+          "batch",
+          "model",
+          "last_run_at",
+          "next_run_at",
+          "overdue",
+          "feature_off"
+        ],
+        "title": "ScheduleRow"
+      },
+      "ScheduleSetting": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "collect",
+              "score",
+              "tailor",
+              "digest"
+            ],
+            "title": "Name"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "every_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Every Minutes"
+          },
+          "at_time": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "At Time"
+          },
+          "batch": {
+            "type": "integer",
+            "title": "Batch"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "board_batch": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Board Batch"
+          },
+          "run_now": {
+            "type": "boolean",
+            "title": "Run Now"
+          },
+          "last_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run At"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "enabled",
+          "every_minutes",
+          "at_time",
+          "batch",
+          "model",
+          "board_batch",
+          "run_now",
+          "last_run_at",
+          "next_run_at"
+        ],
+        "title": "ScheduleSetting"
+      },
+      "SearchPage": {
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/SearchProfile"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "edited_by": {
+            "type": "string",
+            "enum": [
+              "cli",
+              "dashboard"
+            ],
+            "title": "Edited By"
+          },
+          "registry": {
+            "$ref": "#/components/schemas/SourceRegistry"
+          }
+        },
+        "type": "object",
+        "required": [
+          "profile",
+          "version",
+          "edited_by",
+          "registry"
+        ],
+        "title": "SearchPage"
+      },
+      "SearchProfile": {
+        "properties": {
+          "search_terms": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Search Terms"
+          },
+          "locations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Locations"
+          },
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "allow_remote": {
+            "type": "boolean",
+            "title": "Allow Remote"
+          },
+          "min_yoe": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Yoe"
+          },
+          "max_yoe": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Yoe"
+          },
+          "include_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Include Keywords"
+          },
+          "exclude_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exclude Keywords"
+          },
+          "exclude_companies": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exclude Companies"
+          },
+          "max_age_days": {
+            "type": "integer",
+            "title": "Max Age Days"
+          },
+          "score_threshold": {
+            "type": "integer",
+            "title": "Score Threshold"
+          },
+          "boards": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/BoardEntry"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Boards"
+          },
+          "board_title_words": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Board Title Words"
+          }
+        },
+        "type": "object",
+        "required": [
+          "search_terms",
+          "locations",
+          "sources",
+          "allow_remote",
+          "min_yoe",
+          "max_yoe",
+          "include_keywords",
+          "exclude_keywords",
+          "exclude_companies",
+          "max_age_days",
+          "score_threshold",
+          "boards",
+          "board_title_words"
+        ],
+        "title": "SearchProfile"
+      },
+      "SearchProfileIn": {
+        "properties": {
+          "search_terms": {
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Search Terms"
+          },
+          "locations": {
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Locations"
+          },
+          "sources": {
+            "items": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "type": "array",
+            "maxItems": 40,
+            "title": "Sources"
+          },
+          "allow_remote": {
+            "type": "boolean",
+            "title": "Allow Remote"
+          },
+          "min_yoe": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Yoe"
+          },
+          "max_yoe": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Yoe"
+          },
+          "include_keywords": {
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Include Keywords"
+          },
+          "exclude_keywords": {
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "type": "array",
+            "maxItems": 200,
+            "title": "Exclude Keywords"
+          },
+          "exclude_companies": {
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Exclude Companies"
+          },
+          "max_age_days": {
+            "type": "integer",
+            "title": "Max Age Days"
+          },
+          "score_threshold": {
+            "type": "integer",
+            "title": "Score Threshold"
+          },
+          "boards": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/components/schemas/BoardEntry"
+              },
+              "type": "array"
+            },
+            "propertyNames": {
+              "enum": [
+                "greenhouse",
+                "lever",
+                "ashby",
+                "workable",
+                "smartrecruiters"
+              ]
+            },
+            "type": "object",
+            "title": "Boards"
+          },
+          "board_title_words": {
+            "items": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "Board Title Words"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "search_terms",
+          "locations",
+          "sources",
+          "allow_remote",
+          "min_yoe",
+          "max_yoe",
+          "include_keywords",
+          "exclude_keywords",
+          "exclude_companies",
+          "max_age_days",
+          "score_threshold",
+          "boards",
+          "board_title_words"
+        ],
+        "title": "SearchProfileIn",
+        "description": "The profile as the page sends it. Only the shapes are checked here; the rules are the scraper's."
+      },
+      "SearchSave": {
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/SearchProfileIn"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "profile",
+          "version"
+        ],
+        "title": "SearchSave"
+      },
+      "SettingsLimits": {
+        "properties": {
+          "min_every": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Min Every"
+          },
+          "max_every": {
+            "type": "integer",
+            "title": "Max Every"
+          },
+          "max_batch": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Max Batch"
+          },
+          "max_board_batch": {
+            "type": "integer",
+            "title": "Max Board Batch"
+          }
+        },
+        "type": "object",
+        "required": [
+          "min_every",
+          "max_every",
+          "max_batch",
+          "max_board_batch"
+        ],
+        "title": "SettingsLimits",
+        "description": "The scraper's limits, for hints next to the fields (scraper/schedules.py). The scraper enforces them."
+      },
+      "SettingsPage": {
+        "properties": {
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "paused": {
+            "type": "boolean",
+            "title": "Paused"
+          },
+          "paused_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused Reason"
+          },
+          "schedules": {
+            "items": {
+              "$ref": "#/components/schemas/ScheduleSetting"
+            },
+            "type": "array",
+            "title": "Schedules"
+          },
+          "features": {
+            "$ref": "#/components/schemas/FeatureSettings"
+          },
+          "tailoring": {
+            "$ref": "#/components/schemas/TailoringSettings"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/BudgetCaps"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/SettingsLimits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "timezone",
+          "paused",
+          "paused_reason",
+          "schedules",
+          "features",
+          "tailoring",
+          "budget",
+          "limits"
+        ],
+        "title": "SettingsPage"
+      },
+      "SourceFailure": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "last_fetched_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Fetched At"
+          },
+          "last_ok_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ok At"
+          },
+          "last_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Count"
+          },
+          "failures": {
+            "type": "integer",
+            "title": "Failures"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "key",
+          "last_fetched_at",
+          "last_ok_at",
+          "last_count",
+          "failures",
+          "last_error"
+        ],
+        "title": "SourceFailure"
+      },
+      "SourceRegistry": {
+        "properties": {
+          "sources": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "groups": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Groups"
+          },
+          "board_systems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Board Systems"
+          },
+          "paid": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Paid"
+          },
+          "descriptions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Descriptions"
+          },
+          "limits": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Limits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sources",
+          "groups",
+          "board_systems",
+          "paid",
+          "descriptions",
+          "limits"
+        ],
+        "title": "SourceRegistry",
+        "description": "What the scraper knows about sources (scraper/sources.py), for the page to list them."
+      },
+      "Sources": {
+        "properties": {
+          "tracked": {
+            "type": "integer",
+            "title": "Tracked"
+          },
+          "failing": {
+            "type": "integer",
+            "title": "Failing"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SourceFailure"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tracked",
+          "failing",
+          "items"
+        ],
+        "title": "Sources"
+      },
+      "Spend": {
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone"
+          },
+          "claude": {
+            "$ref": "#/components/schemas/ClaudeSpend"
+          },
+          "apify": {
+            "$ref": "#/components/schemas/ApifySpend"
+          },
+          "daily": {
+            "items": {
+              "$ref": "#/components/schemas/DailySpend"
+            },
+            "type": "array",
+            "title": "Daily"
+          },
+          "models": {
+            "items": {
+              "$ref": "#/components/schemas/ModelSpend"
+            },
+            "type": "array",
+            "title": "Models"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_at",
+          "timezone",
+          "claude",
+          "apify",
+          "daily",
+          "models"
+        ],
+        "title": "Spend"
+      },
+      "StatusChange": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "skipped",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn"
+            ],
+            "title": "Status"
+          },
+          "expected_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Expected Status"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "status",
+          "expected_status"
+        ],
+        "title": "StatusChange"
+      },
+      "StatusResult": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "skipped",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn"
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "title": "StatusResult"
+      },
+      "Summary": {
+        "properties": {
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "cards": {
+            "$ref": "#/components/schemas/Cards"
+          },
+          "by_status": {
+            "$ref": "#/components/schemas/ByStatus"
+          },
+          "funnel": {
+            "items": {
+              "$ref": "#/components/schemas/FunnelStep"
+            },
+            "type": "array",
+            "title": "Funnel"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "threshold",
+          "cards",
+          "by_status",
+          "funnel",
+          "generated_at"
+        ],
+        "title": "Summary"
+      },
+      "TailoringChange": {
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "manual"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "min_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Score"
+          },
+          "max_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Score"
+          },
+          "daily_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit"
+          },
+          "cover_letter": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Letter"
+          },
+          "max_pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Pages"
+          },
+          "paper": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "a4",
+                  "letter"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paper"
+          },
+          "clear": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "min_score",
+                "max_score",
+                "daily_limit"
+              ]
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Clear"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TailoringChange"
+      },
+      "TailoringSettings": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "manual"
+            ],
+            "title": "Mode"
+          },
+          "min_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Score"
+          },
+          "max_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Score"
+          },
+          "daily_limit": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Daily Limit"
+          },
+          "approval": {
+            "type": "string",
+            "title": "Approval"
+          },
+          "cover_letter": {
+            "type": "boolean",
+            "title": "Cover Letter"
+          },
+          "max_pages": {
+            "type": "integer",
+            "title": "Max Pages"
+          },
+          "paper": {
+            "type": "string",
+            "title": "Paper"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          }
+        },
+        "type": "object",
+        "required": [
+          "mode",
+          "min_score",
+          "max_score",
+          "daily_limit",
+          "approval",
+          "cover_letter",
+          "max_pages",
+          "paper",
+          "model"
+        ],
+        "title": "TailoringSettings"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "_comment": "Example only. Copy to config/search.json (gitignored) and edit, or let /setup write it. Apply it to the database with: scripts/jobsearch search-profile apply. These are the free rule filters that run BEFORE any AI is called. Every source is one switch: its name in \"sources\". Names: indeed, naukri, linkedin, linkedin_apify (paid: uses Apify credit), glassdoor, ziprecruiter, google; company boards greenhouse, lever, ashby, workable, smartrecruiters (each also needs company slugs under \"boards\"); remote feeds remotive, remoteok, weworkremotely, himalayas, arbeitnow. Change them with: scripts/jobsearch sources (on|off|only NAMES). \"boards\" looks like {\"greenhouse\": [\"stripe\"], \"ashby\": [{\"slug\": \"openai\", \"name\": \"OpenAI\"}]}; find a slug with: scripts/jobsearch boards find NAME. \"board_title_words\" are extra words that qualify a company-board or feed job title on their own (for example \"software\"). See docs/sources.md.",
+  "search_terms": ["backend engineer", "python developer"],
+  "locations": ["Bengaluru", "Pune", "Remote"],
+  "sources": ["indeed", "naukri", "linkedin"],
+  "allow_remote": true,
+  "min_yoe": 0,
+  "max_yoe": 5,
+  "include_keywords": [],
+  "exclude_keywords": ["intern", "internship", "unpaid"],
+  "exclude_companies": [],
+  "max_age_days": 7,
+  "score_threshold": 70,
+  "boards": {},
+  "board_title_words": []
+}

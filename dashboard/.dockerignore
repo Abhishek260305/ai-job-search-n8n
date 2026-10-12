@@ -1,0 +1,15 @@
+web/node_modules
+web/dist
+web/.vite
+web/coverage
+api/tests
+api/pytest.ini
+api/requirements-dev.txt
+**/__pycache__
+**/.pytest_cache
+**/.venv
+**/*.log
+**/.DS_Store
+**/._*
+**/.env
+**/.env.*

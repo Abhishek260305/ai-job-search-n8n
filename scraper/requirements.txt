@@ -1,0 +1,6 @@
+python-jobspy
+fastapi
+uvicorn
+httpx
+psycopg[binary]
+pypdf

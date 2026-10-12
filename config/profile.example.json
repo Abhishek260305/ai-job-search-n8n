@@ -1,0 +1,37 @@
+{
+  "_comment": "Example only. Copy to config/profile.json (gitignored) and fill in your own, or let /setup build it from your resume and LinkedIn export. This is what the scoring model compares each posting against, so be honest: gaps you hide here become bad matches later.",
+  "headline": "Backend engineer building data-heavy APIs in Python and Go",
+  "years_experience": 5,
+  "target_roles": ["Backend Engineer", "Platform Engineer", "Data Engineer"],
+  "skills": {
+    "strong": ["Python", "Go", "PostgreSQL", "REST/gRPC APIs", "Docker", "Kubernetes"],
+    "moderate": ["TypeScript", "React", "AWS", "Kafka"],
+    "weak": ["Java enterprise stacks", "mobile development", "pure ML research"]
+  },
+  "experience_domains": {
+    "strong": ["backend services", "multi-tenant SaaS", "data pipelines"],
+    "moderate": ["full-stack web", "DevOps-leaning platform work"],
+    "entry": ["engineering management", "embedded systems"]
+  },
+  "career_goals": [
+    "Grow into a senior/staff backend or platform role",
+    "Work on systems with real scale and reliability requirements"
+  ],
+  "energizing": ["designing APIs", "improving reliability and latency", "owning a service end to end"],
+  "draining": ["pure maintenance work", "constant context switching across unrelated projects"],
+  "deal_breakers": ["mandatory relocation abroad", "on-site only outside my city"],
+  "location": {
+    "home": "Pune, India",
+    "remote_ok": true,
+    "hybrid_ok": true,
+    "relocation": false,
+    "travel": "occasional"
+  },
+  "languages": [
+    {"name": "English", "level": "fluent"},
+    {"name": "Hindi", "level": "native"}
+  ],
+  "work_authorization": [
+    {"country": "India", "status": "citizen"}
+  ]
+}
