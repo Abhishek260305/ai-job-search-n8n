@@ -535,6 +535,26 @@ def test_a_bold_lead_word_that_is_in_no_source_is_a_soft_finding_so_it_is_not_in
     assert ("lead", "Rust") in soft and ("lead", "Scale") not in soft                          # a common word is fine; an unknown one is shown to you
 
 
+def test_ordinary_topic_words_in_a_bold_lead_are_not_flagged_but_a_tool_name_still_is():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"] = ["I would like to apply for the Senior Backend Engineer role at Globex.",
+                                       "- Fair scheduling: I made billing idempotent so retries never double-bill.",
+                                       "- Safe execution: I built a platform for 50,000+ executions a day.",
+                                       "- Deduplication: I made billing idempotent so retries never double-bill.", "- Batching: I built a platform for 50,000+ executions a day.",
+                                       "- Rust: I built a platform for 50,000+ executions a day.", "- Spring: I built a platform for 50,000+ executions a day.",
+                                       "I would start with the services your team runs."]
+    soft = {v["token"] for v in aud2(p).soft if v["kind"] == "lead"}
+    assert soft == {"Rust", "Spring"}                                   # "Fair", "scheduling", "Safe", "execution" are plain words; unknown tools are shown
+
+
+def test_the_keyword_report_ignores_line_starts_places_and_legal_boilerplate_but_keeps_technologies():
+    job = dict(JOB, description="Requirements:\n- Clear communication with the team\n• Daily standups\nBring curiosity.\n"
+                                "We use Kafka and Terraform on AWS. We hire in Russia and the Czech Republic. Equal Opportunity Employer. See the Poster. Act now.")
+    r = T.keyword_report(RESUME, T.validate_patch(good(), RESUME), job)
+    assert "Kafka" in r["missing"] and "Terraform" in r["missing"]
+    assert not {"Clear", "Daily", "Bring", "Russia", "Republic", "Poster", "Act", "Equal", "Opportunity"} & set(r["missing"])
+
+
 def test_the_title_case_scan_is_linear_so_a_huge_posting_is_not_a_slowdown():
     import time
     big = "We use Kafka and Go. " * 20000                                                        # ~420 KB

@@ -809,7 +809,10 @@ def gap_disclosures(text: str, job_title: str = "", implied_subject: bool = Fals
 COMMON_LEADS = frozenset("""scale reliability performance cost speed ownership quality security realtime latency throughput impact results delivery integration
 observability leadership collaboration mentoring testing efficiency stability growth cleanup migration design architecture debugging optimisation
 optimization automation reliability monitoring availability resilience concurrency scalability maintainability documentation teamwork learning
-fairness isolation billing safety recovery correctness""".split())
+fairness isolation billing safety recovery correctness fair safe safely fast faster reliable resilient agent agents tool tools tooling tenant tenants
+multitenant data pipeline pipelines server servers service services platform platforms failure failures execution retries retry latency-safe
+streaming realtime-delivery orchestration scheduling scheduler concurrency cost costs credit credits billing-safe""".split())
+_GENERIC_ENDING = re.compile(r"(?:tion|sion|ity|ness|ment|ance|ence|ship|ics|ability|ency)s?$|.{4,}ing$", re.I)    # "scheduling", "recovery"; not "Rust", "Spring"
 CLICHES_V2 = ["robust", "seamless", "innovative", "best practices", "fast-paced world", "demonstrated ability to", "i am excited to",
               "excited about the opportunity"]
 
@@ -878,7 +881,7 @@ def audit(resume: dict, patch: dict, job: dict, profile: Optional[dict] = None, 
             for w in tokens(text[2:].split(":", 1)[0]):
                 lw = w.lower()
                 if (lw not in vocab and lw not in profile_vocab and lw not in pp_vocab and lw not in job_vocab and lw not in own_job_tokens
-                        and lw not in COMMON_LEADS and lw not in V2._STOP):
+                        and lw not in COMMON_LEADS and lw not in V2._STOP and not _GENERIC_ENDING.search(lw)):
                     result.soft.append({"where": where, "kind": "lead", "token": w,
                                         "detail": f"the bold lead word '{w}' is not in your resume, profile or the posting: check that it is true"})
         low = text.lower()
@@ -1055,6 +1058,28 @@ def apply_review(resume: dict, patch: dict, job: dict, profile: Optional[dict], 
     return p, applied, dropped
 
 
+# Capitalised words in a posting that are places or legal boilerplate, never a technology the candidate could lack.
+_NOT_A_SKILL = frozenset("""russia republic poster act capital equal opportunity employer union states kingdom america europe asia africa india china
+japan singapore ireland germany france spain italy canada australia brazil mexico poland czech netherlands israel dubai emirates arab saudi
+korea taiwan vietnam thailand malaysia indonesia philippines turkey ukraine romania hungary bulgaria portugal sweden norway denmark finland
+switzerland austria belgium london paris berlin dublin bangalore bengaluru hyderabad mumbai pune chennai delhi noida gurgaon gurugram
+california texas york seattle boston austin denver chicago toronto vancouver amsterdam""".split())
+
+
+def _mid_sentence_words(posting: str) -> set:
+    """Plain capitalised words (lower-cased) seen somewhere that is not the start of a line or a sentence or a bullet: a list of
+    requirements or a heading starts with a capital for no reason, and a technology name keeps its capital in the middle of a sentence."""
+    out = set()
+    for m in re.finditer(r"(?<![A-Za-z0-9])[A-Z][a-z]{2,}(?![A-Za-z0-9])", posting):
+        j = m.start() - 1
+        while j >= 0 and posting[j] in " \t\u00a0":
+            j -= 1
+        if j < 0 or posting[j] in "\n\r.!?:;(\u2022\u00b7\u25aa*-\u2013\u2014#|":
+            continue
+        out.add(m.group(0).lower())
+    return out
+
+
 def keyword_report(resume: dict, patch: dict, job: dict) -> dict:
     """The posting's terms, three ways: `shown` (the resume supports it and the tailored text says it), `low` (the resume supports it but
     only in a skills list or a hidden bullet), `missing` (technical words in the posting that the resume does not have at all: gaps,
@@ -1077,10 +1102,13 @@ def keyword_report(resume: dict, patch: dict, job: dict) -> dict:
     vocab = vocabulary(resume)
     own = {t.lower() for t in tokens(f"{job.get('title') or ''} {job.get('company') or ''}")}
     counts: dict[str, int] = {}
+    mid = _mid_sentence_words(posting)
     for tok in _titlecase_claims(posting):
         lowered = tok.lower()
-        if lowered in vocab or lowered in own or lowered in _SAFE_TITLECASE:
+        if lowered in vocab or lowered in own or lowered in _SAFE_TITLECASE or lowered in _NOT_A_SKILL:
             continue
+        if not _is_technical(tok) and lowered not in mid:
+            continue                    # a plain capitalised word only ever at the start of a line or sentence is not a technology
         if _is_technical(tok) or not _is_common_word(tok, posting):     # "Kafka" yes (capitalised everywhere); "applications" no
             counts[tok] = counts.get(tok, 0) + 1
     missing = [t for t, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))][:12]
