@@ -76,4 +76,3 @@ Add a rule to `_RULES` in `safety.py`: `(code, severity 1-3, regex, detail)`, th
 ## Not covered yet
 - Salary far above market for the role (needs salary data)
 - Company existence and reputation lookups
-- Email-side phishing checks (planned with the Gmail phase)

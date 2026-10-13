@@ -2,11 +2,11 @@
 
 A self-hosted, **near-zero-cost** job-search assistant. It collects jobs from several boards, removes duplicates, filters out the obvious misses for free, scores the rest with a cheap model, and, **if you want it**, spends real tokens tailoring your resume and writing a cover letter for the jobs worth applying to. You review on Telegram or the command line and **apply by hand**: there is no auto-apply.
 
-**Use only what you want.** The core is collect → dedupe → filter → score. Tailoring, Telegram and the daily digest are optional and independent, and each has a fallback: stop at scoring and read your shortlist in the database or a spreadsheet; skip Telegram and review at the command line; skip Gmail-style tracking and set the status yourself. See [Use only what you want](#use-only-what-you-want).
+**Use only what you want.** The core is collect → dedupe → filter → score. Tailoring, Telegram and the daily digest are optional and independent, and each has a fallback: stop at scoring and read your shortlist in the database or a spreadsheet; skip Telegram and review at the command line; skip Gmail tracking and set the status yourself. See [Use only what you want](#use-only-what-you-want).
 
 Built with [n8n](https://n8n.io), PostgreSQL, a small Python service ([JobSpy](https://github.com/speedyapply/JobSpy) plus the pipeline logic), the Claude API, and Docker. It runs on a free-tier VM (for example Oracle Cloud Always Free, ARM).
 
-> **Status: working end to end, still growing.** Collect → dedupe → filter → score → tailor → review is live, with company job boards, remote feeds and a web dashboard (jobs, health, spend, settings, search; works on a phone). Gmail status tracking is planned. See [what works today](#what-works-today) and the [roadmap](docs/roadmap.md).
+> **Status: working end to end, still growing.** Collect → dedupe → filter → score → tailor → review is live, with company job boards, remote feeds, a web dashboard (jobs, board, email, health, spend, settings, search; works on a phone) and optional Gmail status suggestions. See [what works today](#what-works-today) and the [roadmap](docs/roadmap.md).
 
 ## Set it up the easy way: let your AI assistant do it
 
@@ -24,12 +24,37 @@ Once it is set up, with no further effort from you:
 - **Every 30 minutes** it scores new jobs 0-100 against your profile (about $0.0003 per job). *(core)*
 - **Every 15 minutes** it tailors your resume and writes a cover letter for each shortlisted job (about $0.05 per application). *(optional: tailoring)*
 - **Every morning** it sends a digest of new matches, with warnings (closing soon, suspicious posting, eligibility unclear). *(optional: Telegram)*
+- **Every 30 minutes** it looks for replies to your applications in your Gmail (read-only: it cannot send, delete or label anything) and **suggests** the status change, such as applied, interview, offer or rejected. You accept or dismiss each suggestion; nothing changes without you. *(optional: Gmail, off by default; [how it works](#tracking-replies-optional))*
 
 Those times are **defaults**: every schedule, and how much each run does, is a setting (`scripts/jobsearch schedule set collect --every 3h`, `schedule set digest --at 07:30`), applied within 5 minutes with no restart.
 
-You decide with `/approve`, `/skip` and `/applied` on Telegram, or the same commands in the terminal; apply on the employer's site yourself, and record how it went with `mark 24 interview`. Spend is logged and **hard-capped** (default $10 a month).
+You decide with `/approve`, `/skip` and `/applied` on Telegram, or the same commands in the terminal; apply on the employer's site yourself, and record how it went with `mark 24 interview` (or accept the suggestion the Gmail part makes from the reply). Spend is logged and **hard-capped** (default $10 a month).
 
-**Optional web dashboard** (free, password-protected, listens on `127.0.0.1` only): **Jobs** (your numbers, charts, every job, a status menu for each stage of an application, details and PDFs), **Health** (is everything running, with a pause button), **Spend** (Claude and Apify against their caps), **Settings** (schedules, optional parts, tailoring, caps you can lower) and **Search** (what to search for, sources, company boards, "find a company"). It opens in dark mode, fits a phone, and you reach it through an SSH tunnel or, for your phone, Tailscale ([docs/dashboard.md](docs/dashboard.md)).
+**Optional web dashboard** (free, password-protected, listens on `127.0.0.1` only): **Jobs** (your numbers, charts, every job, a status menu for each stage of an application, details and PDFs), **Board** (a Kanban view of your applications with history, notes, follow-ups and undo), **Email** (the reply suggestions to accept or dismiss, when the Gmail part is on), **Health** (is everything running, with a pause button), **Spend** (Claude and Apify against their caps), **Settings** (schedules, optional parts, tailoring, caps you can lower) and **Search** (what to search for, sources, company boards, "find a company"). It opens in dark mode, fits a phone, and you reach it through an SSH tunnel or, for your phone, Tailscale ([docs/dashboard.md](docs/dashboard.md)).
+
+## A look at the dashboard
+
+The optional web dashboard, with **invented demo data** (every company, job and email in these images is made up).
+
+<p align="center"><img src="docs/images/jobs.png" alt="The Jobs page: counts, a funnel, charts and the list of jobs" width="860"></p>
+
+**Jobs**: your numbers, where jobs drop out, and every job with its score and status.
+
+<p align="center"><img src="docs/images/board.png" alt="The Board page: a Kanban view of applications from not applied to offer" width="860"></p>
+
+**Board**: each application as a card, from "not applied" to "offer", with your response rate and follow-up reminders. Nothing on it sends anything.
+
+<p align="center"><img src="docs/images/email.png" alt="The Email page: three suggestions made from replies, one flagged because the role named in the email is not the job's" width="860"></p>
+
+**Email** (the optional Gmail part): replies to your applications, turned into suggestions. Accepting is the same change as moving the card on the board; a suggestion with a doubt, such as a role that does not match the job, makes you confirm before you can accept it.
+
+<p align="center"><img src="docs/images/health.png" alt="The Health page: schedules, last and next run, and a pause button" width="860"></p>
+
+**Health**: is everything running, when each stage last ran, and a pause button.
+
+<p align="center"><img src="docs/images/spend.png" alt="The Spend page: Claude and Apify spend against their caps, and a 30-day chart" width="860"></p>
+
+**Spend**: Claude and Apify against their caps, per day and per model.
 
 ## More sources
 
@@ -51,15 +76,17 @@ Besides Indeed, Naukri and LinkedIn you can read the public job boards of **comp
 | **A. Scoring only** | a scored, deduplicated shortlist in your database; list it, open one in detail, export a CSV | Anthropic key | about $0.0003 per job |
 | **B. + tailoring, review at the CLI** | A, plus a tailored resume and cover letter per shortlisted job, as files | same | + about $0.05 per application |
 | **C. + Telegram** | B, plus a phone: digest, review, commands | + a free Telegram bot | same as B |
+| **D. + Gmail suggestions** | any of the above, plus replies to your applications read and turned into status suggestions you accept or dismiss | + a free Google login you create once ([gmail.md](docs/gmail.md)) | about a cent a day at most |
 
 ```bash
 scripts/jobsearch features                                   # what is on
 scripts/jobsearch features set --tailoring off --telegram off   # setup A
 scripts/jobsearch features set --telegram off                   # setup B
 scripts/jobsearch features set --tailoring on --telegram on     # setup C
+scripts/jobsearch features set --gmail on                       # add D (off by default; needs the Google login first)
 ```
 
-No Telegram configured? It is simply off, and nothing breaks. No tailoring? The pipeline stops at scoring. No Gmail? Set the stage by hand. Every choice, the fallback for each part, and recipes are in **[docs/customization.md](docs/customization.md)**.
+No Telegram configured? It is simply off, and nothing breaks. No tailoring? The pipeline stops at scoring. No Gmail (the default)? Set the stage by hand, or on the dashboard's board. Every choice, the fallback for each part, and recipes are in **[docs/customization.md](docs/customization.md)**.
 
 ## How it works
 
@@ -86,6 +113,30 @@ flowchart LR
 
 n8n only schedules and calls things. All the rules live in the Python service, where they are unit-tested ([architecture](docs/architecture.md)).
 
+### Tracking replies (optional)
+
+After you apply, the replies (a confirmation, an interview invitation, a rejection) arrive by email. With the **Gmail part** switched on, the system reads them and **suggests** the status change on the dashboard's Email page. It is off by default, and without it you keep the manual path (`mark`, or the board).
+
+```mermaid
+flowchart LR
+    G[Gmail<br/>read-only search] --> M[Match to one of<br/>your applications]
+    M --> R[Rules<br/>read the wording]
+    R -->|clear| S[Suggestion]
+    R -->|unclear| C[Claude Haiku<br/>strict JSON, never picks the status]
+    C --> S
+    S --> Y[You<br/>Email page · digest]
+    Y -->|accept| H[(Status + history<br/>Undo works)]
+    Y -->|dismiss| X[Closed]
+```
+
+1. **Read-only and narrow.** The Google permission is `gmail.readonly`: it cannot send, delete, label or archive anything. Each run searches for specific mail (the companies of your open applications, and the usual applicant-tracking senders), never the whole inbox, and keeps only the sender's domain, the subject, the date and a short excerpt.
+2. **A match must be confident.** An email is attached to an application only on evidence (the sender's domain, the company named, the role named). When two applications fit, or none does, nothing is suggested. A reply that names a different role than the matched job, or one with a doubtful sender, is flagged and the page asks for a second look before you accept.
+3. **Rules first, Claude second.** Plain rules read the obvious cases for free. Claude (Haiku) sees only the unclear ones, under the same spending caps as everything else (at most 10 a run and 40 a day), returns a strict answer that code validates, and **cannot choose the status**: code maps the kind of email to a status. The email is untrusted text, like a job posting: an email that tries to instruct the model, or that hides text, is never sent to it.
+4. **Only four statuses, and nothing after an offer.** A reply can suggest applied, interview, offer or rejected. Whether you accept or decline an offer is your decision, not something an email can prove.
+5. **You decide.** Accepting is the same change as moving the job on the board: it is in the job's history and **Undo** works. A suggestion whose job moved on in the meantime is shown as out of date.
+
+Setup is a one-time Google sign-in that you do yourself (`scripts/jobsearch gmail login`; the secret and the tokens never pass through a chat or a repository). All of it, including the rules, the limits and the privacy details: **[docs/gmail.md](docs/gmail.md)**.
+
 ## What works today
 
 | Area | State |
@@ -101,9 +152,9 @@ n8n only schedules and calls things. All the rules live in the Python service, w
 | `/setup`, `/doctor`, `/status`, `/check`, `/budget`, `/tailor`, `/review`, `/features`, `/jobs`, `/mark`, `/schedule`, `/sources` in Claude Code, and the `jobsearch` CLI | ✅ live |
 | **Optional parts:** switch tailoring, Telegram and the digest on or off; no-Telegram review path; manual status tracking; shortlist browsing and CSV export | ✅ live |
 | **Customizable schedules:** when each stage runs and how much it does, the scoring model, timezone, run-now; paper size and writing-style notes for tailoring | ✅ live |
-| Gmail status tracking (interview / rejection / offer detection), optional; manual tracking works today | ⬜ planned |
+| **Gmail status suggestions** (optional, off by default): replies to your applications are read (read-only), matched, classified by rules and, for the unclear ones, Claude Haiku, and shown on the Email page for you to accept or dismiss ([gmail](docs/gmail.md)) | ✅ live; off until you switch it on |
 | Adzuna and Jooble (free API key) | not built yet |
-| **Web dashboard** (optional): jobs with filters, charts, CSV export, details and PDFs, status editing; a health page with a pause button; a spend page; a settings page (schedules, optional parts, tailoring, caps you can lower); a search page (profile, sources, company boards); a Kanban board with the status history of every application, your response rate, notes and contacts on every job, follow-up reminders, undo for a mistaken move, and a "Tailor this job" button for tailoring on request (the newest parts); phone layout; password-protected, with its own low-privilege database role ([dashboard](docs/dashboard.md)) | ✅ live (the Kanban board is the newest part); notes, follow-up reminders, a tailor button and a requeue button are planned |
+| **Web dashboard** (optional): jobs with filters, charts, CSV export, details and PDFs, status editing; a health page with a pause button; a spend page; a settings page (schedules, optional parts, tailoring, caps you can lower); a search page (profile, sources, company boards); a Kanban board with the status history of every application, your response rate, notes and contacts on every job, follow-up reminders, undo for a mistaken move, a "Tailor this job" button for tailoring on request, and an Email page for the Gmail suggestions (the newest parts); phone layout; password-protected, with its own low-privilege database role ([dashboard](docs/dashboard.md)) | ✅ live (the Email page and the Kanban board are the newest parts); a requeue button for parked jobs is planned |
 | Interview prep, company research | ⬜ optional |
 
 Details and the history of each phase: [docs/roadmap.md](docs/roadmap.md).
@@ -161,6 +212,7 @@ Start at the **[documentation index](docs/README.md)**. Highlights:
 | fix something | [troubleshooting](docs/troubleshooting.md) |
 | see what is built and what is next | [roadmap](docs/roadmap.md) |
 | turn on, open or troubleshoot the web dashboard | [dashboard](docs/dashboard.md) |
+| track replies from Gmail (set up the Google login, what is read, the limits) | [gmail](docs/gmail.md) |
 | add a job source | [adding a source](docs/adding-a-source.md) |
 
 ## Repository layout
@@ -169,7 +221,7 @@ Start at the **[documentation index](docs/README.md)**. Highlights:
 docker-compose.yml        postgres, n8n, scraper (the Python service), gotenberg (HTML → PDF); the optional dashboard (profile "dashboard")
 postgres/schema.sql       baseline tables and the upsert_job() dedupe function
 postgres/migrations/      numbered SQL migrations (postgres/migrate.sh); postgres/tests/ checks them
-scraper/                  the Python service: sources (JobSpy, Apify, company boards, feeds), safety, filters, scoring, tailoring, rendering, Telegram, budget
+scraper/                  the Python service: sources (JobSpy, Apify, company boards, feeds), safety, filters, scoring, tailoring, rendering, Telegram, budget, the optional Gmail reader
 dashboard/                the optional web dashboard: api/ (FastAPI), web/ (React), Dockerfile, db-init.sh
 workflows/                the seven n8n workflows (importable JSON): a scheduler plus the pipeline
 config/                   *.example.json files; your real resume/profile/search files are gitignored
@@ -183,13 +235,14 @@ output/                   your generated applications (gitignored, created on fi
 
 ## Cost
 
-Self-hosted n8n and Postgres, free scraping (including company boards and remote feeds), and Telegram are free. The only money is Claude API usage: about **$0.0003 per scored job** and **$0.05 per tailored application**, capped by you (default $10 a month, enforced in the app and, if you set it, by the Anthropic Console). Apify's free monthly credit is optional. See [docs/costs.md](docs/costs.md).
+Self-hosted n8n and Postgres, free scraping (including company boards and remote feeds), and Telegram are free. The only money is Claude API usage: about **$0.0003 per scored job** and **$0.05 per tailored application**, capped by you (default $10 a month, enforced in the app and, if you set it, by the Anthropic Console). Apify's free monthly credit is optional. The optional Gmail part costs nothing to read; only the few replies the rules cannot classify go to Claude (about a cent a day at the very most, under the same caps). See [docs/costs.md](docs/costs.md).
 
 ## Responsible use
 
 - Scraping may violate a job board's terms of service. You are responsible for how you use this. Prefer official APIs (ATS public job-board endpoints, Adzuna, ...) where you can; the company boards and remote feeds this project reads are public endpoints, are fetched with minimum gaps between requests, and the jobs keep their original link and source name for your own private search.
 - Never put your own LinkedIn credentials into any scraper; risking your account is not worth it.
 - Keep your resume, profile and API keys out of git. `.gitignore` is set up for this, and `scripts/check-secrets.sh` double-checks what a commit would publish (run it before every push).
+- The Gmail part reads your own inbox, read-only and only what it searches for, and keeps a domain, a subject, a date and a short excerpt per matched email. Use the mailbox you apply from, never share the login, and revoke it any time at <https://myaccount.google.com/permissions>. Read [docs/gmail.md](docs/gmail.md#privacy) first.
 - Read every generated document before you send it. The honesty checks are strong, not perfect.
 - This tool prepares applications; **you** review and submit them.
 

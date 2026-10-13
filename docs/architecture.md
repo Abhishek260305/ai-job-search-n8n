@@ -77,7 +77,7 @@ collect → safety → dedupe/upsert → free filters → score → threshold �
 | 10 | **Render** | HTML → PDF through Gotenberg, fitted to the page limit and verified (page count, text layer) | service + gotenberg |
 | 11 | **Review** | Telegram message with the PDFs; you `/approve` or `/skip` (or approval is automatic if you chose that) | workflow 04/05 + service |
 | 12 | **Apply** | You, on the employer's site; then `/applied` | you |
-| 13 | **Track** | *Planned (Phase 6):* a Gmail workflow proposes status changes from replies, written only after your approval | — |
+| 13 | **Track** | *Optional:* a Gmail workflow (06) reads replies read-only and proposes status changes, written only after your approval on the Email page ([gmail.md](gmail.md)) | workflow 06 + service |
 
 Every paid call in steps 6, 8 and 9 goes through the **budget guard**: priced at its worst case first, refused if it would break a cap, and logged with the provider's real token counts afterwards ([budget.md](budget.md)).
 

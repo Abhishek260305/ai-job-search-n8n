@@ -6,7 +6,7 @@ Nothing in this project is forced on you. **Collecting, deduplicating, filtering
 core (always on)                         optional (you choose)
 collect → safety → dedupe → filter → score ──► tailoring ──► review ──► apply ──► track
                                                resume +     Telegram    (you)     by hand
-                                               cover letter  or CLI               or Gmail (planned)
+                                               cover letter  or CLI               or Gmail suggestions
 ```
 
 ## Pick a setup
@@ -18,7 +18,7 @@ collect → safety → dedupe → filter → score ──► tailoring ──►
 | Telegram (digest, review, commands) | ❌ | ❌ | ✅ |
 | Where you look | the database: `jobs`, `job N`, `export` | `review` and the PDFs in `output/` | your phone, or the CLI |
 | Approval step | none | none (`auto`) or at the CLI (`cli`) | on Telegram (`review`), or any other choice |
-| Status after applying | by hand (`mark`) | by hand (`mark`) | by hand (`mark`); Gmail planned |
+| Status after applying | by hand (`mark`) | by hand (`mark`) | by hand (`mark`); or Gmail suggestions you accept |
 | Needs | Anthropic key | Anthropic key | Anthropic key + a Telegram bot |
 | Typical cost | about $0.0003 per scored job | + about $0.05 per application | same as B |
 | Switch to it with | `features set --tailoring off --telegram off` | `features set --telegram off` | `features set --tailoring on --telegram on` |
@@ -145,7 +145,7 @@ scripts/jobsearch features                                   # what is on, and w
 scripts/jobsearch features set --tailoring off               # stop at scoring
 scripts/jobsearch features set --telegram off --digest off   # no Telegram, even if it is configured
 scripts/jobsearch features set --tailoring on                # turn it back on
-scripts/jobsearch features set --gmail on                    # the optional Gmail part (off by default; not built yet, see gmail.md)
+scripts/jobsearch features set --gmail on                    # the optional Gmail part (off by default; needs the Google login first, see gmail.md)
 ```
 
 | Switch | On means | Off means (the fallback) |
@@ -153,7 +153,7 @@ scripts/jobsearch features set --gmail on                    # the optional Gmai
 | **tailoring** | shortlisted jobs get a tailored resume and cover letter (in `mode auto`, by themselves; in `mode manual`, when you ask) | the pipeline **stops at scoring**. Shortlisted jobs simply wait in the database with their score, strengths and gaps. No resume or cover-letter model calls are made, and `/tailor` explains that it is switched off. Use `jobs`, `job N`, `export` to see them. |
 | **telegram** | you get review messages, commands and (if the digest is on) the digest | no messages and no commands. Everything Telegram does has a CLI equivalent (below). It is also **off automatically** if `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` are not in `.env`, so you never have to touch it if you never set Telegram up. |
 | **digest** | a morning message lists new matches | no morning message. Telegram commands still work. It needs Telegram, so it is off whenever Telegram is. |
-| **gmail** | replies to your applications are read and turned into status *suggestions* you accept or dismiss ([gmail.md](gmail.md)) | nothing is read. Unlike the others it is **off by default**, and it is also off while the Google login is not in `.env`. The manual path (`mark`, the dashboard board) is unchanged. It is being built in steps: today the switch only turns on a stage that reads nothing. |
+| **gmail** | replies to your applications are read and turned into status *suggestions* you accept or dismiss ([gmail.md](gmail.md)) | nothing is read. Unlike the others it is **off by default**, and it is also off while the Google login is not in `.env`. The manual path (`mark`, the dashboard board) is unchanged. |
 
 Scoring itself is not a switch: it is the point of the pipeline. (It does need your Anthropic key; see [limits](#what-is-not-optional).)
 
@@ -206,7 +206,7 @@ Whatever you choose, an application the honesty checks **flagged** ("needs atten
 
 ## Tracking after you apply, without Gmail
 
-Gmail tracking is planned (Phase 6) and will also be optional. Until then, and always as an alternative, you set the stage yourself, from any stage to any other:
+Gmail tracking ([gmail.md](gmail.md)) is optional too. Without it, and always as an alternative, you set the stage yourself, from any stage to any other:
 
 ```bash
 scripts/jobsearch applied 24 --note "applied on the company site"

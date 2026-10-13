@@ -105,7 +105,7 @@ You can run any part without the others ([customization.md](customization.md) ha
 |---|---|
 | **Telegram** (no digest, no phone commands) | once a day: `scripts/jobsearch jobs --days 1` (new shortlisted jobs, best first), `scripts/jobsearch job 24` (one in detail), then `review`, `approve 24`, `applied 24`, `mark 24 interview`. Prefer a spreadsheet? `scripts/jobsearch export -o jobs.csv`. |
 | **Tailoring** (stop at scoring) | `jobs` and `job N` show the score, strengths, gaps and link; apply with your own resume; record it with `applied N` and `mark N ...`. The pipeline spends only on scoring. |
-| **Gmail tracking** (planned, optional) | you set the stage yourself with `mark`. |
+| **Gmail tracking** (optional, off by default) | you set the stage yourself with `mark`, or on the dashboard's board. |
 | **The approval step** | `scripts/jobsearch tailor-settings set --approval auto`: finished applications are stored ready to apply. Ones the checks flagged still wait for you. |
 
 With no Telegram there is also no budget alert in the digest, so glance at `scripts/jobsearch budget` now and then (the caps still stop paid calls by themselves).

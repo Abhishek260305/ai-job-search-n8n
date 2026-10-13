@@ -1,12 +1,12 @@
 # Gmail status tracking (optional, Phase 6)
 
-**Status: the foundations (6a), the Google login (6b), the search, matcher and rules (6c), the model step (6d) and the scheduled stage (6e) are built and deployed. The dashboard's Email page (6f) is deployed, so suggestions can be accepted or dismissed there. 6g, the first real run on your mailbox, is next.** Switching the part on today checks that the login works and reads no email. This page says what exists, what is planned, and the rules the rest will be built to, so you can judge it before it exists.
+**Status: built and in use.** The foundations (6a), the Google login (6b), the search, matcher and rules (6c), the model step (6d), the scheduled stage (6e) and the dashboard's Email page (6f) are deployed, and the first real run on a mailbox (6g) is done. Switching the part on reads mail and makes suggestions; you accept or dismiss them on the Email page. This page says what each piece does and the rules it is built to, so you can judge it before you switch it on.
 
 The goal: after you apply, replies arrive by email (an interview invitation, an assessment, a rejection). Instead of you moving each job to the right stage by hand, the system reads those replies and **suggests** the change. You accept or dismiss each suggestion. Nothing changes without you.
 
 It is optional like every other part after scoring. Without it you keep the manual path (`scripts/jobsearch mark`, or the dashboard's board) and lose nothing.
 
-## What exists now (step 6a)
+## What the switch, the stage and the tables are (step 6a)
 
 | Piece | What it is |
 |---|---|
@@ -16,9 +16,9 @@ It is optional like every other part after scoring. Without it you keep the manu
 | **Three tables** (migration 021) | `gmail_state` (one row: the settings and the health of the login), `gmail_seen` (every email already looked at, by Gmail's message id, so none is handled twice) and `email_suggestions` (what the reader proposes). The dashboard's database role cannot read any of them. |
 | **Doctor line** | When the switch is on, `doctor` reports the part: not configured, login expired, last check failed, or how many suggestions wait. When it is off, the doctor's "optional parts" line lists it as off and nothing more. |
 
-What it does **not** do yet: read an email, call Claude, or write a suggestion. The scheduled stage runs, checks the saved login, records the result and says so (`the Gmail reader is not built yet`).
+These are the parts every later step builds on. What each later step adds (the search, the matcher and rules, the model step, the stage that runs them and the Email page) is described below.
 
-## How it will work (the plan, and the rules it is built to)
+## How it works (the rules it is built to)
 
 1. **A read-only Google permission.** The login is an OAuth client plus a refresh token, kept in `.env` (never in git). The permission asked for is `gmail.readonly`: the system cannot send, delete, label, archive or mark anything as read.
 2. **A search, not a download.** Each run asks Gmail for specific mail, never the whole inbox: mail that mentions the companies of your open applications, or that comes from the usual job-site senders (Greenhouse, Lever, Workday, Ashby, SmartRecruiters and the like), excluding what you sent. Archived mail counts; spam and trash do not.
@@ -30,7 +30,7 @@ What it does **not** do yet: read an email, call Claude, or write a suggestion. 
 8. **You decide.** Suggestions appear in the dashboard (and as a line in the Telegram digest). *Accept* moves the job through the same function as a click on the board, so it is recorded in the job's history and the Undo button works. *Dismiss* closes it. A suggestion whose job changed in the meantime is refused as stale.
 9. **Offers get a phishing check.** An email that looks like an offer is flagged when the sender does not match the company, when the sender's domain fails authentication, or when it asks for money.
 
-## Planned steps
+## The steps
 
 | Step | What | State |
 |---|---|---|
@@ -40,7 +40,7 @@ What it does **not** do yet: read an email, call Claude, or write a suggestion. 
 | **6d** | Claude classification under the spending caps: counted attempts, parked messages, per-run and per-day limits | ✅ deployed (2026-10-13, migration 023) ([below](#the-model-step-6d)) |
 | **6e** | Wiring: the scheduled stage reads mail (search, then the model step), the doctor, the Telegram digest line | ✅ deployed (2026-10-13, migration 024) ([below](#the-scheduled-stage-6e)); suggestions are accepted on the dashboard's Email page (6f) |
 | **6f** | The dashboard's email inbox: accept, dismiss, stale, undo; the switch and the `mail` schedule appear on the Settings page | ✅ deployed (2026-10-13, migration 025) ([dashboard.md](dashboard.md#version-6f-the-email-inbox)) |
-| **6g** | Docs, review, deploy, and one real run on your mailbox | ⬜ |
+| **6g** | Docs, review, deploy, and one real run on your mailbox | ✅ done (2026-10-13). The real mail showed three matching gaps, now fixed: a reply naming a different role than the matched job (the `role_mismatch` flag), mail sent through a vendor's recruiting system (Oracle's `*.cloud.oracle.com`), and a company written run together in one place and spaced in another |
 
 ## The Google login (6b)
 

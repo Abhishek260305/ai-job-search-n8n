@@ -10,7 +10,7 @@ The aim is as close to $0 as possible. Only one thing costs money: **Claude API 
 | Company job boards and remote feeds | public APIs and feeds, no key ([sources.md](sources.md)) | $0 to fetch; scoring the new jobs they bring is the only cost (below) |
 | Notifications and review | Telegram bot | $0 |
 | Web dashboard (optional) | self-hosted, through the SSH tunnel; no calls to Claude, Apify or Telegram ([dashboard.md](dashboard.md)) | $0 |
-| Email tracking (planned, [gmail.md](gmail.md)) | Gmail API: $0. Classifying the few unclear replies with Haiku (step 6d) is the only cost: about 0.02 cents per email, at most 40 calls a day (about **$0.01 a day** at the very most), under the same caps and the same Console limit |
+| Email tracking (optional, [gmail.md](gmail.md)) | Gmail API: $0. Classifying the few unclear replies with Haiku (step 6d) is the only cost: about 0.02 cents per email, at most 40 calls a day (about **$0.01 a day** at the very most), under the same caps and the same Console limit |
 | **Scoring** | Claude Haiku 5.5 | **about $0.0003 per job** (about $0.30 per 1,000) |
 | **Tailoring** | Claude Sonnet 5.5 (draft + one revision) plus a Haiku fact check | **about $0.04-0.05 per application** |
 
