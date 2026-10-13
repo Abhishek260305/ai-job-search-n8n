@@ -497,7 +497,7 @@ BEGIN
   UPDATE schedule_settings SET at_time = '00:00' WHERE name = 'digest';
   UPDATE schedule_settings SET last_run_at = NULL, run_now = false, enabled = true;
   SELECT count(*) INTO n FROM claim_due_schedules();
-  ASSERT n = 4, 'a fresh install claims collect, score, tailor and digest: ' || n;
+  ASSERT n = 5, 'a fresh install claims collect, score, tailor, digest and mail: ' || n;
   ASSERT (SELECT count(*) FROM claim_due_schedules()) = 0, 'a second tick right after claims nothing (no double starts)';
   ASSERT (SELECT every_minutes FROM schedule_settings WHERE name = 'collect') = 360;
 
@@ -561,7 +561,7 @@ BEGIN
   ASSERT (SELECT next_run_at FROM schedule_status() WHERE name = 'score') IS NULL AND NOT (SELECT enabled FROM schedule_status() WHERE name = 'score');
   UPDATE schedule_settings SET last_run_at = now() WHERE name = 'digest';
   ASSERT (SELECT next_run_at FROM schedule_status() WHERE name = 'digest') > now(), 'after today''s digest the next one is in the future';
-  ASSERT (SELECT array_agg(name) FROM schedule_status()) = ARRAY['collect', 'score', 'tailor', 'digest'], 'a stable order';
+  ASSERT (SELECT array_agg(name) FROM schedule_status()) = ARRAY['collect', 'score', 'tailor', 'digest', 'mail'], 'a stable order';
 
   -- the digest may be daily at a time OR every N hours (011), never both and never neither
   UPDATE schedule_settings SET every_minutes = 360, at_time = NULL WHERE name = 'digest';
@@ -689,7 +689,7 @@ BEGIN
   ASSERT (SELECT count(*) FROM claim_due_schedules()) = 0, 'paused: nothing starts, not even a run-now request';
   ASSERT (SELECT run_now FROM schedule_settings WHERE name = 'collect'), 'the request waits until resumed';
   UPDATE schedule_control SET paused = false;
-  ASSERT (SELECT count(*) FROM claim_due_schedules()) = 4, 'resumed: everything due starts again';
+  ASSERT (SELECT count(*) FROM claim_due_schedules()) = 5, 'resumed: everything due starts again';
 END $$;
 
 -- Company boards and remote feeds (013): settings columns, fetch_state, claim_fetch, record_fetch ---------------
@@ -1068,10 +1068,10 @@ BEGIN
   UPDATE schedule_settings SET enabled = true, last_run_at = now();      -- everything ran a moment ago
   UPDATE feature_settings SET tailoring = true, telegram = true, digest = true;
 
-  -- a quiet system: no alerts, all four schedules listed in their usual order, nothing waiting
+  -- a quiet system: no alerts, all five schedules listed in their usual order, nothing waiting
   h := dashboard_health();
   ASSERT h->'alerts' = '[]'::jsonb, 'quiet system has no alerts, got ' || (h->'alerts')::text;
-  ASSERT (SELECT array_agg(e->>'name') FROM jsonb_array_elements(h->'schedules') e) = ARRAY['collect', 'score', 'tailor', 'digest'];
+  ASSERT (SELECT array_agg(e->>'name') FROM jsonb_array_elements(h->'schedules') e) = ARRAY['collect', 'score', 'tailor', 'digest', 'mail'];
   ASSERT (h->'paused'->>'paused')::boolean = false AND (h->'queue'->>'waiting_to_score')::int = 0;
   ASSERT (h->'parked'->>'total')::int = 0 AND (h->'sources'->>'tracked')::int = 0 AND (h->>'timezone') = 'Asia/Kolkata';
 
@@ -1941,6 +1941,905 @@ BEGIN
   EXCEPTION WHEN check_violation THEN NULL; END;
   DELETE FROM jobs WHERE id = j;
   ASSERT NOT EXISTS (SELECT 1 FROM application_events WHERE job_id = j), 'the history goes with the job';
+END $$;
+
+-- 021: Gmail status tracking, foundations ---------------------------------------------------------------------------------
+-- the switch: off by default (a part that needs a Google login must be asked for), the other three untouched
+DO $$
+BEGIN
+  ASSERT (SELECT column_default FROM information_schema.columns WHERE table_name = 'feature_settings' AND column_name = 'gmail') = 'false',
+         'the Gmail switch defaults to off';
+  ASSERT (SELECT count(*) FROM feature_settings) = 1, 'still one row of switches';
+  UPDATE feature_settings SET gmail = false, tailoring = true, telegram = true, digest = true;
+  UPDATE feature_settings SET gmail = true;
+  ASSERT (SELECT gmail AND tailoring AND telegram AND digest FROM feature_settings), 'the switches are independent';
+  UPDATE feature_settings SET gmail = false;
+  BEGIN UPDATE feature_settings SET gmail = NULL; RAISE EXCEPTION 'a null switch accepted';
+  EXCEPTION WHEN not_null_violation THEN NULL; END;
+END $$;
+
+-- the mail stage: one more schedule, every 30 minutes, 20 messages a run, never more often than every 15
+DO $$
+DECLARE r record; n int;
+BEGIN
+  SELECT * INTO r FROM schedule_settings WHERE name = 'mail';
+  ASSERT r.every_minutes = 30 AND r.batch = 20 AND r.at_time IS NULL AND r.model IS NULL AND r.enabled, 'the default mail schedule';
+  BEGIN UPDATE schedule_settings SET every_minutes = 14 WHERE name = 'mail'; RAISE EXCEPTION 'mail more often than every 15 minutes accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE schedule_settings SET every_minutes = 15 WHERE name = 'mail';
+  UPDATE schedule_settings SET every_minutes = 30 WHERE name = 'mail';
+  BEGIN UPDATE schedule_settings SET every_minutes = NULL, at_time = '08:00' WHERE name = 'mail'; RAISE EXCEPTION 'a daily mail schedule accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE schedule_settings SET batch = 0 WHERE name = 'mail'; RAISE EXCEPTION 'a mail batch of 0 accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE schedule_settings SET batch = 51 WHERE name = 'mail'; RAISE EXCEPTION 'a mail batch of 51 accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE schedule_settings SET model = 'claude-haiku-5-5' WHERE name = 'mail'; RAISE EXCEPTION 'a mail model accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO schedule_settings (name, every_minutes, batch) VALUES ('inbox', 60, 1); RAISE EXCEPTION 'an unknown stage accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+
+  -- it is claimed like the others: once when due, not twice, and held back while its switch is off (p_skip)
+  UPDATE schedule_settings SET last_run_at = NULL, run_now = false, enabled = true WHERE name = 'mail';
+  ASSERT NOT EXISTS (SELECT 1 FROM claim_due_schedules(ARRAY['mail']) WHERE name = 'mail'), 'skipped while the Gmail part is off';
+  SELECT count(*) INTO n FROM claim_due_schedules() WHERE name = 'mail';
+  ASSERT n = 1, 'claimed as soon as it is no longer skipped';
+  ASSERT (SELECT count(*) FROM claim_due_schedules() WHERE name = 'mail') = 0, 'and not twice in a row';
+  UPDATE schedule_settings SET last_run_at = now() - interval '31 minutes' WHERE name = 'mail';
+  ASSERT (SELECT count(*) FROM claim_due_schedules() WHERE name = 'mail') = 1, 'due again after 30 minutes';
+  UPDATE schedule_settings SET last_run_at = now() - interval '10 minutes' WHERE name = 'mail';
+  ASSERT (SELECT count(*) FROM claim_due_schedules() WHERE name = 'mail') = 0, 'not due after 10 minutes';
+  UPDATE schedule_settings SET run_now = true WHERE name = 'mail';
+  ASSERT (SELECT count(*) FROM claim_due_schedules(ARRAY['mail']) WHERE name = 'mail') = 0, 'a run request waits while the part is off';
+  ASSERT (SELECT run_now FROM schedule_settings WHERE name = 'mail'), 'and is kept';
+  ASSERT (SELECT count(*) FROM claim_due_schedules() WHERE name = 'mail') = 1, 'and runs once it is on';
+  ASSERT (SELECT array_agg(name) FROM schedule_status()) = ARRAY['collect', 'score', 'tailor', 'digest', 'mail'], 'mail is listed last';
+END $$;
+
+-- the health panel knows the stage: "feature off" while the switch is off, and no alert for a stage that never ran
+DO $$
+DECLARE h jsonb; e jsonb;
+BEGIN
+  UPDATE schedule_control SET paused = false, paused_at = NULL, reason = NULL;
+  UPDATE schedule_settings SET enabled = true, last_run_at = now();
+  UPDATE feature_settings SET tailoring = true, telegram = true, digest = true, gmail = false;
+  h := dashboard_health();
+  SELECT x INTO e FROM jsonb_array_elements(h->'schedules') x WHERE x->>'name' = 'mail';
+  ASSERT (e->>'feature_off')::boolean, 'mail is feature-off while Gmail is off';
+  ASSERT (SELECT array_agg(x->>'name') FROM jsonb_array_elements(h->'schedules') x) = ARRAY['collect', 'score', 'tailor', 'digest', 'mail'];
+  ASSERT h->'alerts' = '[]'::jsonb, 'no alert for a stage that is off: ' || (h->'alerts')::text;
+  UPDATE feature_settings SET gmail = true;
+  SELECT x INTO e FROM jsonb_array_elements(dashboard_health()->'schedules') x WHERE x->>'name' = 'mail';
+  ASSERT NOT (e->>'feature_off')::boolean, 'mail is in effect when Gmail is on';
+  -- the others are as before
+  SELECT x INTO e FROM jsonb_array_elements(dashboard_health()->'schedules') x WHERE x->>'name' = 'digest';
+  ASSERT NOT (e->>'feature_off')::boolean;
+  -- a mail stage that has never run raises no alert, on or off: only collect and score can be "overdue"
+  UPDATE schedule_settings SET last_run_at = NULL, updated_at = now() - interval '2 days' WHERE name = 'mail';
+  UPDATE feature_settings SET gmail = true;
+  ASSERT dashboard_health()->'alerts' = '[]'::jsonb, 'a never-run mail stage is not an alert: ' || (dashboard_health()->'alerts')::text;
+  UPDATE feature_settings SET gmail = false;
+  ASSERT dashboard_health()->'alerts' = '[]'::jsonb, 'nor while it is off';
+  UPDATE schedule_settings SET last_run_at = now() WHERE name = 'mail';
+  UPDATE feature_settings SET tailoring = false, gmail = false;
+  ASSERT (SELECT bool_and((x->>'feature_off')::boolean) FROM jsonb_array_elements(dashboard_health()->'schedules') x WHERE x->>'name' IN ('tailor', 'mail')),
+         'tailor and mail are both feature-off';
+  UPDATE feature_settings SET tailoring = true;
+END $$;
+
+-- gmail_state: one row, sane limits
+DO $$
+DECLARE o jsonb;
+BEGIN
+  ASSERT (SELECT count(*) FROM gmail_state) = 1, 'one row of state';
+  ASSERT (SELECT lookback_days = 60 AND NOT from_now AND search_cursor IS NULL AND token_status = 'none' AND last_error IS NULL FROM gmail_state),
+         'a fresh install: 60 days back, never searched, no login';
+  BEGIN INSERT INTO gmail_state (id) VALUES (2); RAISE EXCEPTION 'a second state row accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE gmail_state SET lookback_days = 0; RAISE EXCEPTION '0 days accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE gmail_state SET lookback_days = 366; RAISE EXCEPTION '366 days accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE gmail_state SET lookback_days = 1; UPDATE gmail_state SET lookback_days = 365; UPDATE gmail_state SET lookback_days = 60;
+  BEGIN UPDATE gmail_state SET token_status = 'revoked'; RAISE EXCEPTION 'an unknown token status accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE gmail_state SET token_status = 'ok'; UPDATE gmail_state SET token_status = 'expired'; UPDATE gmail_state SET token_status = 'error'; UPDATE gmail_state SET token_status = 'none';
+  BEGIN UPDATE gmail_state SET last_error = repeat('x', 301); RAISE EXCEPTION 'an overlong error accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE gmail_state SET from_now = NULL; RAISE EXCEPTION 'a null from_now accepted';
+  EXCEPTION WHEN not_null_violation THEN NULL; END;
+  o := gmail_overview();
+  ASSERT o->>'lookback_days' = '60' AND o->>'token_status' = 'none' AND (o->>'messages_seen')::int = 0 AND (o->>'pending')::int = 0
+         AND o->'search_cursor' = 'null'::jsonb, 'the overview of a fresh install: ' || o::text;
+  ASSERT NOT (o::text ~* 'subject|excerpt'), 'the overview carries no email text';
+END $$;
+
+-- gmail_seen and email_suggestions: what is allowed in, and what is not
+CREATE TEMP TABLE gm_ids (name text PRIMARY KEY, id bigint NOT NULL);
+DO $$
+DECLARE j1 bigint; j2 bigint; s1 bigint; s2 bigint; ev bigint; o jsonb;
+BEGIN
+  j1 := pg_temp.dash_job(6001, 'applied', 80);
+  j2 := pg_temp.dash_job(6002, 'shortlisted', 70);
+  INSERT INTO gm_ids VALUES ('j1', j1), ('j2', j2);
+
+  -- gmail_seen: a message is recorded once; a bad outcome or an empty id is refused; deleting the job keeps the row
+  INSERT INTO gmail_seen (message_id, thread_id, outcome, job_id) VALUES ('18f0a1', '18f0a0', 'suggested', j1);
+  INSERT INTO gmail_seen (message_id, outcome) VALUES ('18f0a2', 'noise'), ('18f0a3', 'unmatched'), ('18f0a4', 'failed');
+  BEGIN INSERT INTO gmail_seen (message_id, outcome) VALUES ('18f0a1', 'noise'); RAISE EXCEPTION 'a message was recorded twice';
+  EXCEPTION WHEN unique_violation THEN NULL; END;
+  BEGIN INSERT INTO gmail_seen (message_id, outcome) VALUES ('18f0a5', 'maybe'); RAISE EXCEPTION 'an unknown outcome accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO gmail_seen (message_id, outcome) VALUES ('', 'noise'); RAISE EXCEPTION 'an empty message id accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO gmail_seen (message_id, outcome) VALUES (repeat('a', 65), 'noise'); RAISE EXCEPTION 'an overlong message id accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO gmail_seen (message_id, outcome, job_id) VALUES ('18f0a6', 'suggested', -5); RAISE EXCEPTION 'a message about a job that does not exist accepted';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+
+  -- a suggestion
+  INSERT INTO email_suggestions (job_id, message_id, thread_id, received_at, from_domain, subject, excerpt, signal, proposed_status,
+                                 status_at_proposal, confidence, source, flags)
+  VALUES (j1, '18f0a1', '18f0a0', now() - interval '1 day', 'greenhouse.io', 'Interview invitation', 'We would like to schedule a call.',
+          'interview', 'interview', 'applied', 'high', 'rules', ARRAY['date_from_email']) RETURNING id INTO s1;
+  ASSERT (SELECT state = 'pending' AND decided_at IS NULL AND event_id IS NULL FROM email_suggestions WHERE id = s1), 'a new suggestion is pending';
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, '18f0a1', now(), 'x.com', 's', 'e', 'interview', 'interview', 'applied', 'high', 'rules');
+    RAISE EXCEPTION 'two suggestions for one message accepted';
+  EXCEPTION WHEN unique_violation THEN NULL; END;
+
+  -- statuses an email can never propose; and every other field's allowed values
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'h1', now(), 'x.com', 's', 'e', 'offer', 'hired', 'offer', 'high', 'rules');
+    RAISE EXCEPTION 'hired accepted as a proposal';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'h2', now(), 'x.com', 's', 'e', 'offer', 'offer_declined', 'offer', 'high', 'rules');
+    RAISE EXCEPTION 'offer_declined accepted as a proposal';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'h3', now(), 'x.com', 's', 'e', 'offer', 'in_progress', 'applied', 'high', 'rules');
+    RAISE EXCEPTION 'in_progress accepted as a proposal';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'h4', now(), 'x.com', 's', 'e', 'newsletter', 'interview', 'applied', 'high', 'rules');
+    RAISE EXCEPTION 'an unknown signal accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'h5', now(), 'x.com', 's', 'e', 'interview', 'interview', 'applied', 'certain', 'rules');
+    RAISE EXCEPTION 'an unknown confidence accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'h6', now(), 'x.com', 's', 'e', 'interview', 'interview', 'applied', 'high', 'human');
+    RAISE EXCEPTION 'an unknown source accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'h7', now(), 'x.com', repeat('s', 301), 'e', 'interview', 'interview', 'applied', 'high', 'rules');
+    RAISE EXCEPTION 'an overlong subject accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'h8', now(), 'x.com', 's', repeat('e', 601), 'interview', 'interview', 'applied', 'high', 'rules');
+    RAISE EXCEPTION 'an overlong excerpt accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'h9', now(), '', 's', 'e', 'interview', 'interview', 'applied', 'high', 'rules');
+    RAISE EXCEPTION 'an empty sender domain accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, flags)
+    VALUES (j1, 'h10', now(), 'x.com', 's', 'e', 'interview', 'interview', 'applied', 'high', 'rules', ARRAY['a','b','c','d','e','f','g','h','i','j','k']);
+    RAISE EXCEPTION 'eleven flags accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (-5, 'h11', now(), 'x.com', 's', 'e', 'interview', 'interview', 'applied', 'high', 'rules');
+    RAISE EXCEPTION 'a suggestion for a job that does not exist accepted';
+  EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+
+  -- the status follows from the signal: a rejection cannot be filed as an offer, an acknowledgement cannot be an interview
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'm1', now(), 'x.com', 's', 'e', 'rejection', 'offer', 'applied', 'high', 'model');
+    RAISE EXCEPTION 'a rejection was filed as an offer';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j1, 'm2', now(), 'x.com', 's', 'e', 'acknowledgement', 'interview', 'applied', 'high', 'rules');
+    RAISE EXCEPTION 'an acknowledgement was filed as an interview';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  -- every signal has exactly its own status
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, state, decided_at)
+  SELECT j1, 'sig-' || signal, now(), 'x.com', 's', 'e', signal, status, 'applied', 'low', 'rules', 'dismissed', now()
+    FROM (VALUES ('acknowledgement', 'applied'), ('assessment', 'interview'), ('interview', 'interview'), ('offer', 'offer'), ('rejection', 'rejected')) v(signal, status);
+  ASSERT (SELECT count(*) FROM email_suggestions WHERE message_id LIKE 'sig-%') = 5, 'all five signals are accepted with their own status';
+  DELETE FROM email_suggestions WHERE message_id LIKE 'sig-%';
+
+  -- pending means undecided, and only that
+  BEGIN UPDATE email_suggestions SET decided_at = now() WHERE id = s1; RAISE EXCEPTION 'a pending suggestion with a decision time accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE email_suggestions SET state = 'accepted' WHERE id = s1; RAISE EXCEPTION 'an accepted suggestion with no decision time accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE email_suggestions SET state = 'done', decided_at = now() WHERE id = s1; RAISE EXCEPTION 'an unknown state accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+
+  -- the counts in the overview follow the states
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, state, decided_at)
+  VALUES (j2, '18f0b1', now(), 'lever.co', 'Application received', 'Thanks for applying.', 'acknowledgement', 'applied', 'shortlisted', 'high', 'rules', 'dismissed', now());
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, state, decided_at)
+  VALUES (j2, '18f0b2', now(), 'lever.co', 'Unfortunately', 'We will not move forward.', 'rejection', 'rejected', 'shortlisted', 'medium', 'model', 'accepted', now())
+  RETURNING id INTO s2;
+  o := gmail_overview();
+  ASSERT (o->>'pending')::int = 1 AND (o->>'accepted')::int = 1 AND (o->>'dismissed')::int = 1 AND (o->>'messages_seen')::int = 4, 'counts: ' || o::text;
+
+  -- an accepted suggestion points at the history entry it created; if that entry goes, the suggestion stays
+  INSERT INTO application_events (job_id, from_status, to_status, source) VALUES (j2, 'shortlisted', 'applied', 'dashboard') RETURNING id INTO ev;
+  UPDATE email_suggestions SET event_id = ev WHERE id = s2;
+  DELETE FROM application_events WHERE id = ev;
+  ASSERT (SELECT event_id IS NULL AND state = 'accepted' FROM email_suggestions WHERE id = s2), 'deleting the history entry leaves the suggestion';
+
+  -- deleting a job removes its suggestions, and keeps the "seen" row so the email is not looked at again
+  DELETE FROM jobs WHERE id = j1;
+  ASSERT NOT EXISTS (SELECT 1 FROM email_suggestions WHERE job_id = j1), 'a deleted job takes its suggestions with it';
+  ASSERT (SELECT job_id IS NULL FROM gmail_seen WHERE message_id = '18f0a1'), 'the seen row stays, without the job';
+END $$;
+
+-- the dashboard's role reads and writes none of it directly, and cannot run the overview
+DO $$
+BEGIN
+  SET LOCAL ROLE jobsearch_dashboard;
+  ASSERT dashboard_health() ? 'schedules', 'the role still reads the health panel';
+  BEGIN PERFORM 1 FROM gmail_state; RAISE EXCEPTION 'the role read gmail_state';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM 1 FROM gmail_seen; RAISE EXCEPTION 'the role read gmail_seen';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM 1 FROM email_suggestions; RAISE EXCEPTION 'the role read email_suggestions';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE gmail_state SET token_status = 'ok'; RAISE EXCEPTION 'the role wrote gmail_state';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN INSERT INTO gmail_seen (message_id, outcome) VALUES ('zz', 'noise'); RAISE EXCEPTION 'the role wrote gmail_seen';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_overview(); RAISE EXCEPTION 'the role ran gmail_overview';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  -- not merely unable to read the tables inside it: the function itself is not callable by the role (no PUBLIC grant)
+  ASSERT NOT has_function_privilege('jobsearch_dashboard', 'gmail_overview()', 'EXECUTE'), 'the role was granted gmail_overview';
+  BEGIN UPDATE feature_settings SET gmail = true; RAISE EXCEPTION 'the role flipped the Gmail switch';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RESET ROLE;
+END $$;
+
+-- 022: Gmail step 6c: the candidates a reply could be about, and recording one email's result ------------------------------------
+DO $$
+DECLARE ids jsonb := '{}'::jsonb; r record; n int;
+BEGIN
+  -- one job per case: name, job status, application status
+  PERFORM pg_temp.dash_job(7001, 'applied', 80);       -- submitted
+  PERFORM pg_temp.dash_job(7002, 'applied', 80);       -- interview
+  PERFORM pg_temp.dash_job(7003, 'applied', 80);       -- rejected
+  PERFORM pg_temp.dash_job(7004, 'applied', 80);       -- withdrawn
+  PERFORM pg_temp.dash_job(7005, 'skipped', 80);       -- skipped
+  PERFORM pg_temp.dash_job(7006, 'scam_blocked', 80);  -- scam
+  PERFORM pg_temp.dash_job(7007, 'shortlisted', 80);   -- no application: may have been applied by hand
+  PERFORM pg_temp.dash_job(7008, 'tailored', 80);      -- drafted
+  PERFORM pg_temp.dash_job(7009, 'shortlisted', 80);   -- approved
+  PERFORM pg_temp.dash_job(7010, 'new', NULL);         -- not even shortlisted
+  PERFORM pg_temp.dash_job(7011, 'scored', 40);        -- below the threshold
+  PERFORM pg_temp.dash_job(7012, 'shortlisted', 80);   -- an application the user skipped
+  PERFORM pg_temp.dash_job(7013, 'applied', 80);       -- offer
+  FOR r IN SELECT id, regexp_replace(company, '\D', '', 'g')::int AS n FROM jobs WHERE company LIKE 'DashCo 70%' LOOP
+    ids := ids || jsonb_build_object(r.n::text, r.id);
+  END LOOP;
+  PERFORM set_application_status((ids->>'7001')::bigint, 'applied');
+  PERFORM set_application_status((ids->>'7002')::bigint, 'interview');
+  PERFORM set_application_status((ids->>'7003')::bigint, 'rejected');
+  PERFORM set_application_status((ids->>'7004')::bigint, 'withdrawn');
+  PERFORM set_application_status((ids->>'7005')::bigint, 'skipped');
+  INSERT INTO applications (job_id, status, variant) VALUES ((ids->>'7008')::bigint, 'drafted', 'tailored');
+  PERFORM set_application_status((ids->>'7009')::bigint, 'approved');
+  PERFORM set_application_status((ids->>'7012')::bigint, 'skipped');
+  PERFORM set_application_status((ids->>'7013')::bigint, 'offer');
+  CREATE TEMP TABLE IF NOT EXISTS gm22 (k text PRIMARY KEY, v jsonb);
+  INSERT INTO gm22 VALUES ('ids', ids);
+
+  -- who may receive a reply
+  SELECT count(*) INTO n FROM gmail_candidates() WHERE company LIKE 'DashCo 70%';
+  ASSERT n = 8, 'eight candidates (7001-7004, 7007-7009, 7013; none of skipped, scam-blocked, new, scored): ' || n;
+  ASSERT NOT EXISTS (SELECT 1 FROM gmail_candidates() WHERE job_id IN ((ids->>'7005')::bigint, (ids->>'7006')::bigint, (ids->>'7010')::bigint,
+                                                                       (ids->>'7011')::bigint, (ids->>'7012')::bigint)),
+         'skipped, scam-blocked, new, low-scored and user-skipped jobs are never candidates';
+  ASSERT (SELECT app_status IS NULL FROM gmail_candidates() WHERE job_id = (ids->>'7007')::bigint), 'a shortlisted job with no application has no application status';
+  ASSERT (SELECT app_status FROM gmail_candidates() WHERE job_id = (ids->>'7003')::bigint) = 'rejected', 'a final status is still a candidate (a late email is a conflict worth showing)';
+  -- active submitted applications come first
+  ASSERT (SELECT app_status FROM gmail_candidates() LIMIT 1) IN ('applied', 'interview', 'offer'), 'the first candidate is an active submitted application';
+  ASSERT (SELECT count(*) FROM (SELECT * FROM gmail_candidates() LIMIT 3) t WHERE t.app_status IN ('applied', 'interview', 'offer')) = 3
+         AND (SELECT count(*) FROM gmail_candidates(2)) = 2, 'a limit is honoured';
+  ASSERT (SELECT count(*) FROM gmail_candidates(0)) = 1 AND (SELECT count(*) FROM gmail_candidates(-5)) = 1, 'a limit below 1 means 1';
+END $$;
+
+DO $$
+DECLARE ids jsonb; j1 bigint; j2 bigint; res text; sug jsonb; off jsonb;
+BEGIN
+  SELECT v INTO ids FROM gm22 WHERE k = 'ids';
+  j1 := (ids->>'7001')::bigint; j2 := (ids->>'7002')::bigint;
+  sug := jsonb_build_object('received_at', '2026-10-12T09:30:00+00:00', 'from_domain', 'acme.com', 'subject', 'Interview invitation',
+                            'excerpt', 'We would like to schedule a call.', 'signal', 'interview', 'proposed_status', 'interview',
+                            'status_at_proposal', 'applied', 'confidence', 'high', 'source', 'rules', 'flags', jsonb_build_array('unverified_sender', 'date_from_email'));
+
+  off := sug || '{"signal": "offer", "proposed_status": "offer"}'::jsonb;        -- j2 has no pending offer, so these reach the table's own rules
+
+  -- the unclear outcome exists, an unknown one does not
+  BEGIN INSERT INTO gmail_seen (message_id, outcome) VALUES ('u1', 'maybe'); RAISE EXCEPTION 'an unknown outcome accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  INSERT INTO gmail_seen (message_id, outcome, job_id) VALUES ('u1', 'unclear', j1);
+
+  -- a suggestion and the sighting are recorded together
+  res := gmail_record_result('m22a', 't22a', 'suggested', j1, sug);
+  ASSERT res = 'suggested', res;
+  ASSERT (SELECT state = 'pending' AND flags = ARRAY['unverified_sender', 'date_from_email'] AND signal = 'interview' AND job_id = j1
+            FROM email_suggestions WHERE message_id = 'm22a'), 'the suggestion has its fields and flags';
+  ASSERT (SELECT outcome = 'suggested' AND job_id = j1 FROM gmail_seen WHERE message_id = 'm22a');
+
+  -- recording the same email again changes nothing
+  res := gmail_record_result('m22a', 't22a', 'suggested', j1, sug);
+  ASSERT res = 'noise', 'the same email twice: ' || res;
+  ASSERT (SELECT count(*) FROM email_suggestions WHERE message_id = 'm22a') = 1 AND (SELECT count(*) FROM gmail_seen WHERE message_id = 'm22a') = 1;
+
+  -- a second email that proposes the same status for the same job does not create a second pending suggestion
+  res := gmail_record_result('m22b', 't22b', 'suggested', j1, sug);
+  ASSERT res = 'noise' AND NOT EXISTS (SELECT 1 FROM email_suggestions WHERE message_id = 'm22b'), 'one pending suggestion per job and status';
+  ASSERT (SELECT outcome FROM gmail_seen WHERE message_id = 'm22b') = 'noise', 'and the email is still recorded as looked at';
+  -- a different status for the job, or the same status for another job, is its own suggestion
+  res := gmail_record_result('m22c', 't22c', 'suggested', j1, sug || '{"signal": "rejection", "proposed_status": "rejected"}'::jsonb);
+  ASSERT res = 'suggested', 'a different status is a different suggestion';
+  res := gmail_record_result('m22d', 't22d', 'suggested', j2, sug);
+  ASSERT res = 'suggested', 'the same status for another job is its own suggestion';
+  -- once the first is decided, the next email may suggest it again
+  UPDATE email_suggestions SET state = 'dismissed', decided_at = now() WHERE message_id = 'm22a';
+  res := gmail_record_result('m22e', 't22e', 'suggested', j1, sug);
+  ASSERT res = 'suggested', 'a decided suggestion no longer blocks a new one';
+
+  -- outcomes without a suggestion
+  ASSERT gmail_record_result('m22f', NULL, 'noise', NULL) = 'noise' AND gmail_record_result('m22g', 't', 'unmatched', NULL) = 'unmatched'
+     AND gmail_record_result('m22h', 't', 'unclear', j1) = 'unclear' AND gmail_record_result('m22i', 't', 'failed', NULL) = 'failed';
+  ASSERT (SELECT count(*) FROM gmail_seen WHERE message_id IN ('m22f', 'm22g', 'm22h', 'm22i')) = 4;
+
+  -- what must be refused, and leaves nothing behind
+  BEGIN PERFORM gmail_record_result('m22j', 't', 'noise', j1, sug); RAISE EXCEPTION 'a suggestion with the outcome noise accepted';
+  EXCEPTION WHEN raise_exception THEN NULL; END;
+  BEGIN PERFORM gmail_record_result('m22k', 't', 'suggested', NULL, sug); RAISE EXCEPTION 'a suggestion without a job accepted';
+  EXCEPTION WHEN raise_exception THEN NULL; END;
+  BEGIN PERFORM gmail_record_result('m22l', 't', 'maybe', NULL); RAISE EXCEPTION 'an unknown outcome accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN PERFORM gmail_record_result('m22m', 't', 'suggested', j2, off || '{"signal": "rejection"}'::jsonb); RAISE EXCEPTION 'a signal that does not fit its status accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN PERFORM gmail_record_result('m22n', 't', 'suggested', j2, off || jsonb_build_object('excerpt', repeat('x', 601))); RAISE EXCEPTION 'an overlong excerpt accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN PERFORM gmail_record_result('m22o', 't', 'suggested', j2, off || '{"proposed_status": "hired"}'::jsonb); RAISE EXCEPTION 'hired accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  ASSERT NOT EXISTS (SELECT 1 FROM gmail_seen WHERE message_id IN ('m22j', 'm22k', 'm22l', 'm22m', 'm22n', 'm22o'))
+     AND NOT EXISTS (SELECT 1 FROM email_suggestions WHERE message_id IN ('m22j', 'm22k', 'm22l', 'm22m', 'm22n', 'm22o')),
+         'a refused result leaves neither a suggestion nor a sighting';
+  -- ten flags at most (the column's own rule)
+  BEGIN PERFORM gmail_record_result('m22p', 't', 'suggested', j2, off || jsonb_build_object('flags', (SELECT jsonb_agg('f' || g) FROM generate_series(1, 11) g)));
+        RAISE EXCEPTION 'eleven flags accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+END $$;
+
+DO $$
+DECLARE ids jsonb; j3 bigint; j4 bigint; res text; low jsonb; high jsonb; n int; pm text; pc text; pd text; ps text;
+BEGIN
+  SELECT v INTO ids FROM gm22 WHERE k = 'ids';
+  j3 := (ids->>'7003')::bigint; j4 := (ids->>'7004')::bigint;
+  low  := jsonb_build_object('received_at', '2026-10-12T09:30:00+00:00', 'from_domain', 'evil.example', 'subject', 'Job offer', 'excerpt', 'pay a fee',
+                             'signal', 'offer', 'proposed_status', 'offer', 'status_at_proposal', 'applied', 'confidence', 'low', 'source', 'rules', 'flags', '["phishing_risk"]'::jsonb);
+  high := low || '{"from_domain": "acme.com", "subject": "Offer letter", "excerpt": "pleased to offer you the role", "confidence": "high", "flags": []}'::jsonb;
+
+  -- at most one pending suggestion per job and status, enforced by the table (two runs at once cannot make two)
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+  VALUES (j3, 'dupA', now(), 'x.com', 's', 'e', 'offer', 'offer', 'applied', 'low', 'rules');
+  BEGIN
+    INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+    VALUES (j3, 'dupB', now(), 'x.com', 's', 'e', 'offer', 'offer', 'applied', 'low', 'rules');
+    RAISE EXCEPTION 'two pending suggestions for one job and status accepted';
+  EXCEPTION WHEN unique_violation THEN NULL; END;
+  UPDATE email_suggestions SET state = 'dismissed', decided_at = now() WHERE message_id = 'dupA';
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source)
+  VALUES (j3, 'dupC', now(), 'x.com', 's', 'e', 'offer', 'offer', 'applied', 'low', 'rules');
+  DELETE FROM email_suggestions WHERE message_id IN ('dupA', 'dupC');
+
+  -- a spoof first, then the genuine email: the genuine one takes the place, it is not lost
+  res := gmail_record_result('spoof1', 't', 'suggested', j4, low);
+  ASSERT res = 'suggested' AND (SELECT confidence FROM email_suggestions WHERE message_id = 'spoof1') = 'low';
+  res := gmail_record_result('real1', 't', 'suggested', j4, high);
+  ASSERT res = 'suggested', 'a more trustworthy email replaces the pending one: ' || res;
+  SELECT count(*), max(message_id), max(confidence), max(from_domain), max(subject) INTO n, pm, pc, pd, ps
+    FROM email_suggestions WHERE job_id = j4 AND state = 'pending' AND proposed_status = 'offer';
+  ASSERT n = 1 AND pm = 'real1' AND pc = 'high' AND pd = 'acme.com' AND ps = 'Offer letter', 'one pending suggestion, now the genuine email';
+  ASSERT (SELECT flags = '{}' FROM email_suggestions WHERE message_id = 'real1'), 'its flags replaced the spoof''s';
+  ASSERT (SELECT outcome FROM gmail_seen WHERE message_id = 'spoof1') = 'suggested' AND (SELECT outcome FROM gmail_seen WHERE message_id = 'real1') = 'suggested';
+  -- an equal or less trustworthy one afterwards changes nothing
+  res := gmail_record_result('spoof2', 't', 'suggested', j4, low);
+  ASSERT res = 'noise' AND (SELECT message_id FROM email_suggestions WHERE job_id = j4 AND state = 'pending' AND proposed_status = 'offer') = 'real1', 'a worse email never displaces a better one';
+  res := gmail_record_result('real2', 't', 'suggested', j4, high);
+  ASSERT res = 'noise' AND (SELECT message_id FROM email_suggestions WHERE job_id = j4 AND state = 'pending' AND proposed_status = 'offer') = 'real1', 'an equal one does not displace it either';
+  -- the same email again, as a replacement candidate, is still idempotent
+  res := gmail_record_result('real1', 't', 'suggested', j4, high);
+  ASSERT res = 'noise' AND (SELECT count(*) FROM email_suggestions WHERE job_id = j4) = 1;
+  -- a decided suggestion is never overwritten
+  UPDATE email_suggestions SET state = 'accepted', decided_at = now() WHERE message_id = 'real1';
+  res := gmail_record_result('real3', 't', 'suggested', j4, high);
+  ASSERT res = 'suggested' AND (SELECT state FROM email_suggestions WHERE message_id = 'real1') = 'accepted' AND (SELECT count(*) FROM email_suggestions WHERE job_id = j4) = 2,
+         'an accepted suggestion stays as it was; a new email makes a new pending one';
+
+  -- rescan: forget the cursor, re-open what was looked at but not acted on, keep suggestions and failures
+  UPDATE gmail_state SET search_cursor = now();
+  DELETE FROM gmail_seen WHERE message_id LIKE 'rs-%';
+  INSERT INTO gmail_seen (message_id, outcome) VALUES ('rs-noise', 'noise'), ('rs-unm', 'unmatched'), ('rs-unc', 'unclear'), ('rs-sug', 'suggested'), ('rs-fail', 'failed');
+  n := gmail_rescan();
+  ASSERT n >= 3, 'at least the three re-opened rows were counted: ' || n;
+  ASSERT (SELECT search_cursor IS NULL FROM gmail_state), 'the cursor is forgotten';
+  ASSERT NOT EXISTS (SELECT 1 FROM gmail_seen WHERE message_id IN ('rs-noise', 'rs-unm', 'rs-unc')) AND (SELECT count(*) FROM gmail_seen WHERE message_id IN ('rs-sug', 'rs-fail')) = 2,
+         'noise, unmatched and unclear are re-opened; suggested and failed stay';
+  ASSERT (SELECT count(*) FROM email_suggestions WHERE job_id = j4) = 2, 'suggestions already made are untouched';
+END $$;
+
+DO $$
+BEGIN
+  SET LOCAL ROLE jobsearch_dashboard;
+  BEGIN PERFORM gmail_candidates(); RAISE EXCEPTION 'the role ran gmail_candidates'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_record_result('zz', 't', 'noise', NULL); RAISE EXCEPTION 'the role ran gmail_record_result'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_rescan(); RAISE EXCEPTION 'the role ran gmail_rescan'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RESET ROLE;
+  ASSERT NOT has_function_privilege('jobsearch_dashboard', 'gmail_candidates(int)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_record_result(text, text, text, bigint, jsonb)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_rescan()', 'EXECUTE'), 'no PUBLIC grant';
+END $$;
+
+
+-- 023: Gmail step 6d: claiming unclear emails for the model, counted and parked; settling them -------------------------------------
+DO $$
+DECLARE ids jsonb; j1 bigint; j2 bigint; j7 bigint; j8 bigint; n int; r record; res text; sug jsonb; before_n int;
+BEGIN
+  SELECT v INTO ids FROM gm22 WHERE k = 'ids';
+  j1 := (ids->>'7001')::bigint; j2 := (ids->>'7002')::bigint; j7 := (ids->>'7007')::bigint; j8 := (ids->>'7008')::bigint;
+  DELETE FROM email_suggestions;
+  DELETE FROM gmail_seen WHERE outcome = 'unclear';
+  INSERT INTO gmail_seen (message_id, thread_id, outcome, job_id, seen_at) VALUES
+    ('c-old',  't-old',  'unclear', j1, now() - interval '3 hours'),
+    ('c-mid',  't-mid',  'unclear', j2, now() - interval '2 hours'),
+    ('c-new',  't-new',  'unclear', j7, now() - interval '1 hour'),
+    ('c-nojob', NULL,    'unclear', NULL, now()),
+    ('c-noise', NULL,    'noise',   j1, now());
+  ASSERT (SELECT classify_claims = 0 AND classify_claimed_at IS NULL FROM gmail_seen WHERE message_id = 'c-old'), 'new rows start unclaimed';
+  BEGIN UPDATE gmail_seen SET classify_claims = 21 WHERE message_id = 'c-old'; RAISE EXCEPTION 'claims above 20 accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE gmail_seen SET classify_claims = -1 WHERE message_id = 'c-old'; RAISE EXCEPTION 'negative claims accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+
+  -- the counts before anything is claimed: three waiting, none parked (the row without a job and the noise row are not counted)
+  ASSERT gmail_unclear_counts() = '{"waiting": 3, "parked": 0}'::jsonb, gmail_unclear_counts()::text;
+
+  -- a claim: newest first, counted, leased, with what the model step needs about the application
+  SELECT count(*) INTO n FROM gmail_claim_unclear(2);
+  ASSERT n = 2, 'two claimed: ' || n;
+  ASSERT (SELECT classify_claims = 1 AND classify_claimed_at IS NOT NULL FROM gmail_seen WHERE message_id = 'c-new')
+     AND (SELECT classify_claims = 1 FROM gmail_seen WHERE message_id = 'c-mid')
+     AND (SELECT classify_claims = 0 FROM gmail_seen WHERE message_id = 'c-old'), 'the two newest were claimed and counted';
+  SELECT * INTO r FROM gmail_claim_unclear(10);
+  ASSERT r.message_id = 'c-old' AND r.job_id = j1 AND r.thread_id = 't-old' AND r.company = (SELECT company FROM jobs WHERE id = j1)
+         AND r.job_status = 'applied' AND r.app_status = 'applied', 'what is returned: the email, its job, company, title and statuses';
+  SELECT count(*) INTO n FROM gmail_claim_unclear(10);
+  ASSERT n = 0, 'leased rows are not claimed again, and the row without a job and the noise row never are: ' || n;
+  ASSERT (SELECT app_status IS NULL FROM gmail_claim_unclear(0) LIMIT 1) IS NULL, 'a limit of zero claims nothing';
+  ASSERT (SELECT count(*) FROM gmail_claim_unclear(-3)) = 0 AND (SELECT count(*) FROM gmail_claim_unclear(1000)) = 0, 'limits are clamped';
+
+  -- the lease runs out: claimable again, and counted again
+  UPDATE gmail_seen SET classify_claimed_at = now() - interval '21 minutes' WHERE message_id = 'c-new';
+  SELECT count(*) INTO n FROM gmail_claim_unclear(10);
+  ASSERT n = 1 AND (SELECT classify_claims = 2 FROM gmail_seen WHERE message_id = 'c-new'), 'an expired lease is claimed again and counted: ' || n;
+
+  -- a refund: the claim is given back (and a row that is no longer unclear is left alone)
+  n := gmail_release_classify_claim('c-new');
+  ASSERT n = 1 AND (SELECT classify_claims = 1 AND classify_claimed_at IS NULL FROM gmail_seen WHERE message_id = 'c-new'), 'refunded';
+  ASSERT gmail_release_classify_claim('c-noise') = 0 AND gmail_release_classify_claim('no-such-id') = 0, 'nothing to refund for other rows';
+  PERFORM gmail_release_classify_claim('c-new'); PERFORM gmail_release_classify_claim('c-new');
+  ASSERT (SELECT classify_claims = 0 FROM gmail_seen WHERE message_id = 'c-new'), 'a refund never goes below zero';
+
+  -- three claims park an email: never claimed again, counted as parked
+  UPDATE gmail_seen SET classify_claims = 3, classify_claimed_at = NULL WHERE message_id = 'c-new';
+  ASSERT (SELECT count(*) FROM gmail_claim_unclear(10) WHERE message_id = 'c-new') = 0, 'a parked email is not claimed';
+  ASSERT gmail_unclear_counts() ->> 'parked' = '1', gmail_unclear_counts()::text;
+  ASSERT gmail_unclear_counts(5) ->> 'parked' = '0', 'the limit is a parameter';
+  ASSERT (SELECT count(*) FROM gmail_claim_unclear(10, 5) WHERE message_id = 'c-new') = 1, 'and so is it for a claim';
+  UPDATE gmail_seen SET classify_claims = 3, classify_claimed_at = NULL WHERE message_id = 'c-new';
+
+  -- settling
+  sug := jsonb_build_object('received_at', '2026-10-12T09:30:00+00:00', 'from_domain', 'acme.com', 'subject', 'An update',
+                            'excerpt', 'we will not be moving forward', 'signal', 'rejection', 'proposed_status', 'rejected',
+                            'status_at_proposal', 'applied', 'confidence', 'medium', 'source', 'model', 'flags', jsonb_build_array('classified_by_model'));
+  BEGIN PERFORM gmail_settle_unclear('c-old', 't-old', 'unmatched', j1); RAISE EXCEPTION 'settled as unmatched';
+  EXCEPTION WHEN raise_exception THEN IF SQLERRM LIKE 'settled as%' THEN RAISE; END IF; END;
+  BEGIN PERFORM gmail_settle_unclear('c-old', 't-old', 'suggested', j1); RAISE EXCEPTION 'suggested without a suggestion';
+  EXCEPTION WHEN raise_exception THEN IF SQLERRM LIKE 'suggested without%' THEN RAISE; END IF; END;
+  BEGIN PERFORM gmail_settle_unclear('c-old', 't-old', 'noise', j1, sug); RAISE EXCEPTION 'noise with a suggestion';
+  EXCEPTION WHEN raise_exception THEN IF SQLERRM LIKE 'noise with%' THEN RAISE; END IF; END;
+  res := gmail_settle_unclear('c-old', 't-old', 'noise', j2);
+  ASSERT res = 'gone' AND (SELECT outcome = 'unclear' AND job_id = j1 FROM gmail_seen WHERE message_id = 'c-old'), 'an answer for another job than the email now has changes nothing';
+  ASSERT (SELECT outcome = 'unclear' FROM gmail_seen WHERE message_id = 'c-old'), 'a refused settle changes nothing';
+
+  res := gmail_settle_unclear('c-old', 't-old', 'suggested', j1, sug);
+  ASSERT res = 'suggested', res;
+  ASSERT (SELECT outcome = 'suggested' AND classify_claimed_at IS NULL FROM gmail_seen WHERE message_id = 'c-old'), 'the sighting is now suggested';
+  ASSERT (SELECT source = 'model' AND signal = 'rejection' AND proposed_status = 'rejected' AND confidence = 'medium' AND state = 'pending'
+            AND flags = ARRAY['classified_by_model'] AND job_id = j1 FROM email_suggestions WHERE message_id = 'c-old'), 'a model suggestion is stored as one';
+  res := gmail_settle_unclear('c-old', 't-old', 'noise', j1);
+  ASSERT res = 'gone', 'settling again changes nothing: gone';
+
+  -- an equal suggestion for the same job and status is noise; a more trustworthy one takes the pending suggestion's place
+  INSERT INTO gmail_seen (message_id, outcome, job_id) VALUES ('c-dup', 'unclear', j1), ('c-better', 'unclear', j1);
+  res := gmail_settle_unclear('c-dup', NULL, 'suggested', j1, sug);
+  ASSERT res = 'noise' AND (SELECT count(*) FROM email_suggestions WHERE job_id = j1 AND state = 'pending') = 1, 'an equal one is noise: ' || res;
+  ASSERT (SELECT outcome = 'noise' FROM gmail_seen WHERE message_id = 'c-dup'), 'and is recorded as noise';
+  res := gmail_settle_unclear('c-better', NULL, 'suggested', j1, sug || '{"confidence": "high"}'::jsonb);
+  ASSERT res = 'suggested' AND (SELECT message_id = 'c-better' AND confidence = 'high' FROM email_suggestions WHERE job_id = j1 AND state = 'pending'), 'a better one replaces it';
+
+  -- noise and failed
+  res := gmail_settle_unclear('c-mid', 't-mid', 'noise', j2);
+  ASSERT res = 'noise' AND (SELECT outcome = 'noise' FROM gmail_seen WHERE message_id = 'c-mid'), 'noise';
+  INSERT INTO gmail_seen (message_id, outcome, job_id) VALUES ('c-fail', 'unclear', j8);
+  res := gmail_settle_unclear('c-fail', NULL, 'failed', j8);
+  ASSERT res = 'failed' AND (SELECT outcome = 'failed' FROM gmail_seen WHERE message_id = 'c-fail'), 'failed';
+
+  -- a row that a rescan removed is not brought back
+  res := gmail_settle_unclear('removed-by-rescan', NULL, 'noise', j1);
+  ASSERT res = 'gone' AND NOT EXISTS (SELECT 1 FROM gmail_seen WHERE message_id = 'removed-by-rescan'), 'nothing is written for a row that is gone';
+
+  -- the per-day count: only today's model calls for emails, in the budget's time zone
+  before_n := gmail_classified_today();
+  INSERT INTO llm_usage (provider, purpose, model, job_id, ok) VALUES ('anthropic', 'mail_classify', 'claude-haiku-5-5', j1, true), ('anthropic', 'mail_classify', 'claude-haiku-5-5', j1, false),
+                                                                 ('anthropic', 'score', 'claude-haiku-5-5', j1, true), ('apify', 'mail_classify', NULL, NULL, true);
+  INSERT INTO llm_usage (at, provider, purpose, model, job_id, ok) VALUES (now() - interval '2 days', 'anthropic', 'mail_classify', 'claude-haiku-5-5', j1, true);
+  ASSERT gmail_classified_today() = before_n + 2, 'two calls today (a failed call counts too); not another purpose, provider or day: ' || (gmail_classified_today() - before_n);
+
+  -- only jobs that can get a reply are claimed and counted; the predicate is gmail_candidates()'s rule
+  ASSERT (SELECT bool_and((c.job_id IS NOT NULL) = gmail_can_get_reply(j.status, a.status))
+            FROM jobs j LEFT JOIN applications a ON a.job_id = j.id LEFT JOIN gmail_candidates(1000) c ON c.job_id = j.id
+           WHERE j.company LIKE 'DashCo 70%'), 'gmail_can_get_reply says the same as gmail_candidates for every test job';
+  ASSERT NOT gmail_can_get_reply('scam_blocked', 'applied') AND NOT gmail_can_get_reply('shortlisted', 'skipped')
+     AND NOT gmail_can_get_reply('new', NULL) AND NOT gmail_can_get_reply('scored', 'drafted') AND gmail_can_get_reply('shortlisted', NULL)
+     AND gmail_can_get_reply('tailored', 'drafted') AND gmail_can_get_reply('applied', 'offer') AND gmail_can_get_reply('applied', 'withdrawn')
+     AND NOT gmail_can_get_reply(NULL, NULL), 'the predicate, case by case';
+  DELETE FROM gmail_seen WHERE outcome = 'unclear';
+  INSERT INTO gmail_seen (message_id, outcome, job_id) VALUES
+    ('e-skipped', 'unclear', (ids->>'7005')::bigint), ('e-scam', 'unclear', (ids->>'7006')::bigint),
+    ('e-new', 'unclear', (ids->>'7010')::bigint), ('e-ok', 'unclear', j1);
+  SELECT count(*) INTO n FROM gmail_claim_unclear(10);
+  ASSERT n = 1 AND (SELECT classify_claims = 1 FROM gmail_seen WHERE message_id = 'e-ok')
+     AND (SELECT count(*) = 0 FROM gmail_seen WHERE classify_claims > 0 AND message_id IN ('e-skipped', 'e-scam', 'e-new')),
+         'a skipped, scam-blocked or not-yet-shortlisted job is never claimed: ' || n;
+  ASSERT gmail_unclear_counts() = '{"waiting": 1, "parked": 0}'::jsonb, 'and not counted: ' || gmail_unclear_counts()::text;
+  SELECT classify_claims INTO n FROM gmail_seen WHERE message_id = 'e-skipped';
+  ASSERT n = 0;
+  -- the job becomes a candidate again (it is un-scam-blocked): its email is claimable again
+  UPDATE jobs SET status = 'shortlisted' WHERE id = (ids->>'7006')::bigint;
+  SELECT count(*) INTO n FROM gmail_claim_unclear(10) WHERE message_id = 'e-scam';
+  ASSERT n = 1, 'a job that can get a reply again has its email claimed';
+
+  -- a rescan keeps the noise the model settled, re-opens the rules' noise, unmatched, unclear and parked rows
+  DELETE FROM gmail_seen;
+  INSERT INTO gmail_seen (message_id, outcome, job_id, classify_claims) VALUES
+    ('r-model-noise', 'noise', j1, 1), ('r-rules-noise', 'noise', j1, 0), ('r-unm', 'unmatched', NULL, 0), ('r-parked', 'unclear', j1, 3),
+    ('r-sug', 'suggested', j1, 1), ('r-fail', 'failed', NULL, 0);
+  n := gmail_rescan();
+  ASSERT n = 3 AND (SELECT array_agg(message_id ORDER BY message_id) FROM gmail_seen) = ARRAY['r-fail', 'r-model-noise', 'r-sug'],
+         'a rescan keeps what the model settled (and suggested and failed): ' || n;
+
+  -- a rescan clears the parked rows as well
+  INSERT INTO gmail_seen (message_id, outcome, job_id, classify_claims) VALUES ('c-new', 'unclear', j7, 3);
+  n := gmail_rescan();
+  ASSERT NOT EXISTS (SELECT 1 FROM gmail_seen WHERE message_id = 'c-new') AND (SELECT count(*) FROM gmail_seen WHERE message_id IN ('r-fail', 'r-sug')) = 2, 'a rescan reopens parked rows; suggested and failed stay';
+END $$;
+
+DO $$
+BEGIN
+  SET LOCAL ROLE jobsearch_dashboard;
+  BEGIN PERFORM gmail_claim_unclear(1); RAISE EXCEPTION 'the role ran gmail_claim_unclear'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_release_classify_claim('x'); RAISE EXCEPTION 'the role ran the release'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_settle_unclear('x', NULL, 'noise', 1); RAISE EXCEPTION 'the role ran the settle'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_unclear_counts(); RAISE EXCEPTION 'the role ran the counts'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_classified_today(); RAISE EXCEPTION 'the role ran the day count'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_can_get_reply('applied', 'applied'); RAISE EXCEPTION 'the role ran the predicate'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RESET ROLE;
+  ASSERT NOT has_function_privilege('jobsearch_dashboard', 'gmail_claim_unclear(int, int, interval)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_release_classify_claim(text)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_settle_unclear(text, text, text, bigint, jsonb)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_unclear_counts(int)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_classified_today()', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_can_get_reply(text, text)', 'EXECUTE'), 'no PUBLIC grant';
+END $$;
+
+
+-- 024: Gmail step 6e: the stage's record, and what the digest says about mail ------------------------------------------------------
+DO $$
+DECLARE ids jsonb; j1 bigint; j2 bigint; d jsonb; n int; sid1 bigint; sid2 bigint; sid3 bigint; o jsonb;
+BEGIN
+  SELECT v INTO ids FROM gm22 WHERE k = 'ids';
+  j1 := (ids->>'7001')::bigint; j2 := (ids->>'7002')::bigint;
+  DELETE FROM email_suggestions;
+  UPDATE feature_settings SET gmail = true;
+  UPDATE gmail_state SET token_status = 'ok', login_alerted_at = NULL, early_stops = 0, last_summary = NULL;
+
+  -- the run record: counts stored, early stops counted in a row, a clean run resets them
+  PERFORM gmail_record_run('{"search": {"opened": 3}}'::jsonb, true);
+  PERFORM gmail_record_run('{"search": {"opened": 4}}'::jsonb, true);
+  ASSERT (SELECT early_stops = 2 AND last_summary #>> '{search,opened}' = '4' AND last_run_at IS NOT NULL FROM gmail_state), 'two early runs in a row are counted';
+  PERFORM gmail_record_run('{"search": {"opened": 5}}'::jsonb, false);
+  ASSERT (SELECT early_stops = 0 FROM gmail_state), 'a clean run resets the count';
+  BEGIN PERFORM gmail_record_run(('{"x": "' || repeat('a', 2100) || '"}')::jsonb, false); RAISE EXCEPTION 'a huge summary accepted';
+  EXCEPTION WHEN check_violation THEN NULL; END;
+  o := gmail_overview();
+  ASSERT o ? 'last_summary' AND o ? 'early_stops' AND (o->>'early_stops') = '0', 'the overview carries both';
+
+  -- the digest: only pending suggestions that were not announced yet, newest first, no subject and no text
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, flags)
+  VALUES (j1, 'dg1', now(), 'acme.com', 'SECRET SUBJECT', 'SECRET EXCERPT', 'interview', 'interview', 'applied', 'medium', 'rules', '{}'),
+         (j2, 'dg2', now(), 'beta.com', 'SECRET SUBJECT', 'SECRET EXCERPT', 'rejection', 'rejected', 'applied', 'high', 'model', ARRAY['classified_by_model']),
+         (j1, 'dg3', now(), 'acme.com', 'SECRET SUBJECT', 'SECRET EXCERPT', 'offer', 'offer', 'applied', 'low', 'rules', ARRAY['phishing_risk']);
+  SELECT id INTO sid1 FROM email_suggestions WHERE message_id = 'dg1'; SELECT id INTO sid2 FROM email_suggestions WHERE message_id = 'dg2'; SELECT id INTO sid3 FROM email_suggestions WHERE message_id = 'dg3';
+  d := gmail_digest(5);
+  ASSERT (d->>'total_new')::int = 3 AND jsonb_array_length(d->'suggestions') = 3 AND (d->>'login_alert') = 'false', d::text;
+  ASSERT (d->'suggestions'->0->>'id')::bigint = sid3, 'newest first';
+  ASSERT d::text NOT LIKE '%SECRET%', 'neither the subject nor the excerpt is in the digest';
+  ASSERT (d->'suggestions'->0) ? 'company' AND (d->'suggestions'->0) ? 'title' AND (d->'suggestions'->0) ? 'flags' AND (d->'suggestions'->1->>'source') = 'model', 'what the message needs';
+  ASSERT jsonb_array_length(gmail_digest(2)->'suggestions') = 2 AND (gmail_digest(2)->>'total_new')::int = 3, 'the limit cuts the list, not the count';
+  ASSERT jsonb_array_length(gmail_digest(0)->'suggestions') = 1 AND jsonb_array_length(gmail_digest(1000)->'suggestions') = 3, 'limits are clamped';
+
+  -- announced once
+  n := gmail_digest_sent(ARRAY[sid1, sid2], false);
+  ASSERT n = 2 AND (gmail_digest()->>'total_new')::int = 1, 'two were announced: ' || n;
+  ASSERT gmail_digest_sent(ARRAY[sid1, sid2], false) = 0, 'announcing again changes nothing';
+  ASSERT gmail_digest_sent(NULL, false) = 0 AND gmail_digest_sent('{}', false) = 0, 'nothing to announce';
+  UPDATE email_suggestions SET state = 'dismissed', decided_at = now() WHERE id = sid3;
+  ASSERT (gmail_digest()->>'total_new')::int = 0, 'a suggestion decided before it was announced is never announced';
+
+  -- the login alert: due once while the login is not working, never while it works, re-armed by a working login
+  ASSERT (gmail_digest()->>'login_alert') = 'false', 'no alert while the login works';
+  UPDATE gmail_state SET token_status = 'expired';
+  ASSERT (gmail_digest()->>'login_alert') = 'true', 'due while the login does not work';
+  n := gmail_digest_sent(NULL, true);
+  ASSERT (gmail_digest()->>'login_alert') = 'false' AND (SELECT login_alerted_at IS NOT NULL FROM gmail_state), 'said once';
+  UPDATE gmail_state SET login_alerted_at = NULL;
+  UPDATE gmail_state SET token_status = 'error';
+  ASSERT (gmail_digest()->>'login_alert') = 'false', 'an error (a rate limit, an outage) is not an expired login';
+  UPDATE gmail_state SET token_status = 'none';
+  ASSERT (gmail_digest()->>'login_alert') = 'false', 'no login at all is not an expired one';
+  UPDATE gmail_state SET token_status = 'ok', login_alerted_at = NULL;       -- what record_gmail_login does for a working login
+  UPDATE gmail_state SET token_status = 'expired';
+  ASSERT (gmail_digest()->>'login_alert') = 'true', 'a later expiry is said again';
+  UPDATE gmail_state SET token_status = 'ok';
+  PERFORM gmail_digest_sent(NULL, true);
+  ASSERT (SELECT login_alerted_at IS NULL FROM gmail_state), 'a working login is never marked as announced';
+
+  -- while the Gmail part is off the digest says nothing about mail
+  UPDATE email_suggestions SET state = 'pending', decided_at = NULL, notified_at = NULL WHERE id = sid3;
+  UPDATE gmail_state SET token_status = 'expired', login_alerted_at = NULL;
+  UPDATE feature_settings SET gmail = false;
+  d := gmail_digest(5);
+  ASSERT (d->>'total_new') = '0' AND (d->>'login_alert') = 'false' AND jsonb_array_length(d->'suggestions') = 0, 'off: nothing: ' || d::text;
+  UPDATE feature_settings SET gmail = true;
+  UPDATE gmail_state SET token_status = 'ok';
+END $$;
+
+DO $$
+BEGIN
+  SET LOCAL ROLE jobsearch_dashboard;
+  BEGIN PERFORM gmail_record_run('{}'::jsonb, false); RAISE EXCEPTION 'the role ran gmail_record_run'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_digest(1); RAISE EXCEPTION 'the role ran gmail_digest'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_digest_sent(NULL, false); RAISE EXCEPTION 'the role ran gmail_digest_sent'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_overview(); RAISE EXCEPTION 'the role ran gmail_overview'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RESET ROLE;
+  ASSERT NOT has_function_privilege('jobsearch_dashboard', 'gmail_record_run(jsonb, boolean)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_digest(int)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_digest_sent(bigint[], boolean)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'gmail_overview()', 'EXECUTE'), 'no PUBLIC grant, and the replaced overview kept its revoke';
+END $$;
+
+
+-- 025: Gmail step 6f: the dashboard's email inbox ------------------------------------------------------------------------------------
+DO $$
+DECLARE ids jsonb; j1 bigint; j2 bigint; j6 bigint; j7 bigint; inbox jsonb; it jsonb; r jsonb; sid bigint; sid2 bigint; sid3 bigint; ev bigint;
+        st text; det text;
+BEGIN
+  SELECT v INTO ids FROM gm22 WHERE k = 'ids';
+  j1 := (ids->>'7001')::bigint; j2 := (ids->>'7002')::bigint; j6 := (ids->>'7006')::bigint; j7 := (ids->>'7007')::bigint;
+  DELETE FROM email_suggestions;
+  UPDATE feature_settings SET gmail = true;
+  UPDATE gmail_state SET token_status = 'ok', early_stops = 0;
+  UPDATE jobs SET status = 'scam_blocked' WHERE id = j6;
+
+  -- the transition rule, pair by pair (the same table as scraper/mail_rules.propose, which the rehearsal compares for every pair)
+  ASSERT email_transition_ok('acknowledgement', 'none') AND email_transition_ok('acknowledgement', 'drafted') AND NOT email_transition_ok('acknowledgement', 'applied'), 'ack';
+  ASSERT email_transition_ok('interview', 'applied') AND email_transition_ok('assessment', 'in_progress') AND NOT email_transition_ok('interview', 'interview')
+     AND NOT email_transition_ok('interview', 'offer') AND NOT email_transition_ok('assessment', 'rejected'), 'interview and assessment';
+  ASSERT email_transition_ok('offer', 'interview') AND NOT email_transition_ok('offer', 'offer') AND NOT email_transition_ok('offer', 'rejected') AND NOT email_transition_ok('offer', 'withdrawn'), 'offer';
+  ASSERT email_transition_ok('rejection', 'interview') AND NOT email_transition_ok('rejection', 'rejected') AND NOT email_transition_ok('rejection', 'offer') AND NOT email_transition_ok('rejection', 'withdrawn'), 'rejection';
+  ASSERT NOT email_transition_ok('hired', 'applied') AND NOT email_transition_ok(NULL, 'applied'), 'an unknown signal never changes anything';
+  ASSERT email_needs_ack(ARRAY['conflict'], 'high') AND email_needs_ack(ARRAY['phishing_risk'], 'medium') AND email_needs_ack('{}', 'low')
+     AND email_needs_ack(ARRAY['unverified_sender'], 'medium') AND email_needs_ack(ARRAY['display_name_only'], 'medium')
+     AND email_needs_ack(ARRAY['unfamiliar_domain_ending'], 'medium') AND email_needs_ack(ARRAY['domain_matches_first_word_only'], 'medium')
+     AND NOT email_needs_ack(ARRAY['classified_by_model', 'date_from_email', 'template_mixed_signals'], 'medium') AND NOT email_needs_ack(NULL, 'high'), 'which suggestions need a second look';
+
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, flags) VALUES
+    (j1, 'in1', now() - interval '2 hours', 'acme.com', 'Interview invitation', 'We would like to schedule a call.', 'interview', 'interview', 'applied', 'medium', 'rules', '{}'),
+    (j1, 'in2', now() - interval '1 hour',  'acme.com', 'Unfortunately', 'we will not be moving forward', 'rejection', 'rejected', 'applied', 'medium', 'model', ARRAY['classified_by_model']),
+    (j2, 'in3', now(), 'beta.com', 'Offer', 'pleased to offer you the position', 'offer', 'offer', 'interview', 'low', 'rules', ARRAY['phishing_risk']),
+    (j6, 'in4', now(), 'gamma.com', 'Hello', 'thank you for applying', 'acknowledgement', 'applied', 'none', 'high', 'rules', '{}'),
+    (j7, 'in5', now(), 'delta.com', 'Thanks', 'thank you for applying', 'acknowledgement', 'applied', 'none', 'high', 'rules', ARRAY['date_from_email']);
+  SELECT id INTO sid FROM email_suggestions WHERE message_id = 'in1'; SELECT id INTO sid2 FROM email_suggestions WHERE message_id = 'in2'; SELECT id INTO sid3 FROM email_suggestions WHERE message_id = 'in3';
+
+  -- the inbox: shape, counts, ordering, what the page may do
+  inbox := dashboard_email_inbox('pending', 50);
+  ASSERT (inbox->>'enabled') = 'true' AND (inbox->>'login') = 'ok' AND (inbox->'counts'->>'pending') = '5' AND jsonb_array_length(inbox->'items') = 5, inbox::text;
+  it := (SELECT x FROM jsonb_array_elements(inbox->'items') x WHERE (x->>'id')::bigint = sid);
+  ASSERT it->>'company' = (SELECT company FROM jobs WHERE id = j1) AND it->>'from_domain' = 'acme.com' AND it->>'subject' = 'Interview invitation'
+     AND it->>'excerpt' LIKE 'We would like%' AND it->>'signal' = 'interview' AND it->>'proposed_status' = 'interview' AND it->>'current_status' = 'applied'
+     AND (it->>'stale') = 'false' AND (it->>'can_accept') = 'true' AND (it->>'needs_ack') = 'false' AND (it->>'can_undo') = 'false', it::text;
+  ASSERT (SELECT (x->>'needs_ack') FROM jsonb_array_elements(inbox->'items') x WHERE (x->>'id')::bigint = sid3) = 'true', 'a phishing flag needs a second look';
+  ASSERT (SELECT (x->>'can_accept') FROM jsonb_array_elements(inbox->'items') x WHERE x->>'job_id' = j6::text) = 'false', 'a scam-blocked job cannot be accepted into';
+  ASSERT (SELECT (x->>'needs_ack') FROM jsonb_array_elements(inbox->'items') x WHERE x->>'job_id' = j7::text) = 'false', 'a date note is not a trust flag';
+  ASSERT (inbox->'items'->0->>'id')::bigint IN (SELECT id FROM email_suggestions WHERE message_id IN ('in3', 'in4', 'in5')), 'newest first';
+  ASSERT jsonb_array_length(dashboard_email_inbox('pending', 2)->'items') = 2 AND jsonb_array_length(dashboard_email_inbox('pending', 0)->'items') = 1
+     AND jsonb_array_length(dashboard_email_inbox('pending', 100000)->'items') = 5, 'limits are clamped';
+  BEGIN PERFORM dashboard_email_inbox('superseded'); RAISE EXCEPTION 'a state that is not offered was accepted'; EXCEPTION WHEN SQLSTATE 'JD422' THEN NULL; END;
+  BEGIN PERFORM dashboard_email_inbox(NULL); RAISE EXCEPTION 'null accepted'; EXCEPTION WHEN SQLSTATE 'JD422' THEN NULL; END;
+  ASSERT dashboard_email_count() = jsonb_build_object('enabled', true, 'pending', 5), dashboard_email_count()::text;
+  UPDATE feature_settings SET gmail = false;
+  ASSERT (dashboard_email_count()->>'enabled') = 'false' AND (dashboard_email_inbox()->>'enabled') = 'false' AND (dashboard_email_count()->>'pending') = '5', 'the inbox is still readable while the part is off';
+  UPDATE feature_settings SET gmail = true;
+
+  -- refusals
+  BEGIN PERFORM dashboard_email_accept(-1, 'applied'); RAISE EXCEPTION 'no such suggestion accepted'; EXCEPTION WHEN SQLSTATE 'JD404' THEN NULL; END;
+  BEGIN PERFORM dashboard_email_accept(sid3, 'interview'); RAISE EXCEPTION 'a flagged suggestion accepted without a second look'; EXCEPTION WHEN SQLSTATE 'JD422' THEN NULL; END;
+  BEGIN PERFORM dashboard_email_accept((SELECT id FROM email_suggestions WHERE message_id = 'in4'), 'scam_blocked', true); RAISE EXCEPTION 'a scam-blocked job accepted'; EXCEPTION WHEN SQLSTATE 'JD403' THEN NULL; END;
+  BEGIN PERFORM dashboard_email_accept(sid, 'shortlisted'); RAISE EXCEPTION 'a wrong expected status accepted';
+  EXCEPTION WHEN SQLSTATE 'JD409' THEN GET STACKED DIAGNOSTICS det = PG_EXCEPTION_DETAIL; ASSERT det = 'applied', 'the current status is in the detail: ' || coalesce(det, 'null'); END;
+  ASSERT (SELECT state FROM email_suggestions WHERE id = sid) = 'pending', 'a refused accept changes nothing';
+  ASSERT NOT EXISTS (SELECT 1 FROM application_events WHERE job_id = j1 AND to_status = 'interview'), 'and writes no history';
+
+  -- accept: the board's own function, with its history entry and its Undo
+  r := dashboard_email_accept(sid, 'applied');
+  ASSERT r->>'status' = 'interview' AND (r->>'event_id') IS NOT NULL AND (r->>'job_id')::bigint = j1, r::text;
+  ev := (r->>'event_id')::bigint;
+  ASSERT (SELECT status FROM applications WHERE job_id = j1) = 'interview', 'the application moved';
+  ASSERT (SELECT source = 'dashboard' AND to_status = 'interview' AND from_status = 'applied' FROM application_events WHERE id = ev), 'recorded in the history as a dashboard change';
+  ASSERT (SELECT state = 'accepted' AND event_id = ev AND decided_at IS NOT NULL FROM email_suggestions WHERE id = sid), 'the suggestion is closed and tied to the entry';
+  ASSERT (SELECT (x->>'can_undo') FROM jsonb_array_elements(dashboard_email_inbox('accepted')->'items') x WHERE (x->>'id')::bigint = sid) = 'true', 'it can be undone';
+  -- the other pending suggestion for the job (a rejection at 'applied') is still meaningful from 'interview': it stays, and is not stale
+  ASSERT (SELECT state FROM email_suggestions WHERE id = sid2) = 'pending'
+     AND (SELECT (x->>'stale') FROM jsonb_array_elements(dashboard_email_inbox('pending')->'items') x WHERE (x->>'id')::bigint = sid2) = 'false', 'a rejection is still possible after an interview';
+  BEGIN PERFORM dashboard_email_accept(sid, 'interview'); RAISE EXCEPTION 'an accepted suggestion accepted twice'; EXCEPTION WHEN SQLSTATE 'JD409' THEN NULL; END;
+  r := dashboard_undo_status(j1, 'interview', ev);
+  ASSERT (SELECT status FROM applications WHERE job_id = j1) = 'applied', 'Undo takes it back: ' || r::text;
+  ASSERT (SELECT state FROM email_suggestions WHERE id = sid) = 'accepted', 'the suggestion stays accepted: it was acted on';
+  BEGIN PERFORM dashboard_email_accept(sid, 'applied'); RAISE EXCEPTION 'an accepted suggestion accepted again after the undo';
+  EXCEPTION WHEN SQLSTATE 'JD409' THEN NULL; END;
+  ASSERT (SELECT status FROM applications WHERE job_id = j1) = 'applied', 'and the second attempt changed nothing';
+  ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(dashboard_email_inbox('pending')->'items') x WHERE (x->>'id')::bigint = sid)
+     AND EXISTS (SELECT 1 FROM jsonb_array_elements(dashboard_email_inbox('accepted')->'items') x WHERE (x->>'id')::bigint = sid)
+     AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(dashboard_email_inbox('dismissed')->'items') x WHERE (x->>'id')::bigint = sid), 'each tab holds only its own state';
+  ASSERT (SELECT (x->>'can_undo') FROM jsonb_array_elements(dashboard_email_inbox('accepted')->'items') x WHERE (x->>'id')::bigint = sid) = 'false', 'and cannot be undone twice';
+
+  -- stale: the job moved on so that the change no longer makes sense
+  PERFORM dashboard_set_status(j1, 'rejected', 'applied');
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, flags)
+  VALUES (j1, 'in6', now(), 'acme.com', 'Invite', 'schedule a call', 'interview', 'interview', 'applied', 'medium', 'rules', '{}');
+  it := (SELECT x FROM jsonb_array_elements(dashboard_email_inbox('pending')->'items') x WHERE x->>'subject' = 'Invite');
+  ASSERT (it->>'stale') = 'true' AND (it->>'can_accept') = 'false', 'an interview invitation for a job that is now rejected is stale: ' || it::text;
+  BEGIN PERFORM dashboard_email_accept((it->>'id')::bigint, 'rejected'); RAISE EXCEPTION 'a stale suggestion accepted';
+  EXCEPTION WHEN SQLSTATE 'JD409' THEN GET STACKED DIAGNOSTICS det = PG_EXCEPTION_DETAIL; ASSERT det = 'rejected', 'the current status is in the detail'; END;
+  ASSERT (SELECT state FROM email_suggestions WHERE message_id = 'in6') = 'pending', 'refused, so still pending: it can only be dismissed';
+  PERFORM dashboard_set_status(j1, 'applied', 'rejected');
+
+  -- accepting leaves the other suggestions of the job alone: whether one still fits is worked out each time it is read
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, flags)
+  VALUES (j2, 'in7', now(), 'beta.com', 'Rejected', 'not moving forward', 'rejection', 'rejected', 'interview', 'medium', 'rules', '{}');
+  r := dashboard_email_accept((SELECT id FROM email_suggestions WHERE message_id = 'in7'), 'interview');
+  ASSERT r->>'status' = 'rejected', r::text;
+  ASSERT (SELECT state FROM email_suggestions WHERE id = sid3) = 'pending', 'the offer suggestion is not closed behind your back';
+  it := (SELECT x FROM jsonb_array_elements(dashboard_email_inbox('pending')->'items') x WHERE (x->>'id')::bigint = sid3);
+  ASSERT (it->>'stale') = 'true' AND (it->>'can_accept') = 'false', 'it is shown as stale (an offer for a rejected job): ' || it::text;
+  -- the undo of that accept brings everything back to how it was, siblings included
+  ev := (r->>'event_id')::bigint;
+  PERFORM dashboard_undo_status(j2, 'rejected', ev);
+  it := (SELECT x FROM jsonb_array_elements(dashboard_email_inbox('pending')->'items') x WHERE (x->>'id')::bigint = sid3);
+  ASSERT (it->>'stale') = 'false' AND (it->>'can_accept') = 'true', 'after the undo the offer suggestion is acceptable again: ' || it::text;
+  it := (SELECT x FROM jsonb_array_elements(dashboard_email_inbox('accepted')->'items') x WHERE x->>'subject' = 'Rejected');
+  ASSERT (it->>'can_restore') = 'true' AND (it->>'can_undo') = 'false', 'the accepted suggestion whose change was undone can be brought back: ' || it::text;
+  r := dashboard_email_restore((it->>'id')::bigint);
+  ASSERT r->>'state' = 'pending' AND (SELECT event_id IS NULL AND decided_at IS NULL FROM email_suggestions WHERE message_id = 'in7'), 'brought back as pending with no history entry';
+  -- an accepted suggestion the job still reflects cannot be brought back
+  r := dashboard_email_accept((SELECT id FROM email_suggestions WHERE message_id = 'in7'), 'interview');
+  BEGIN PERFORM dashboard_email_restore((SELECT id FROM email_suggestions WHERE message_id = 'in7')); RAISE EXCEPTION 'an accepted suggestion the job reflects was brought back';
+  EXCEPTION WHEN SQLSTATE 'JD409' THEN NULL; END;
+  ASSERT (SELECT (x->>'can_restore') FROM jsonb_array_elements(dashboard_email_inbox('accepted')->'items') x WHERE x->>'subject' = 'Rejected' LIMIT 1) = 'false', 'and is not offered';
+  PERFORM dashboard_undo_status(j2, 'rejected', (r->>'event_id')::bigint);
+
+  -- dismiss and restore
+  PERFORM dashboard_email_dismiss((SELECT id FROM email_suggestions WHERE message_id = 'in6'));
+  ASSERT (SELECT state = 'dismissed' AND decided_at IS NOT NULL FROM email_suggestions WHERE message_id = 'in6');
+  BEGIN PERFORM dashboard_email_dismiss((SELECT id FROM email_suggestions WHERE message_id = 'in6')); RAISE EXCEPTION 'dismissed twice'; EXCEPTION WHEN SQLSTATE 'JD409' THEN NULL; END;
+  BEGIN PERFORM dashboard_email_dismiss(-5); RAISE EXCEPTION 'unknown dismissed'; EXCEPTION WHEN SQLSTATE 'JD404' THEN NULL; END;
+  r := dashboard_email_restore((SELECT id FROM email_suggestions WHERE message_id = 'in6'));
+  ASSERT r->>'state' = 'pending' AND (SELECT decided_at IS NULL FROM email_suggestions WHERE message_id = 'in6'), 'restored';
+  BEGIN PERFORM dashboard_email_restore((SELECT id FROM email_suggestions WHERE message_id = 'in6')); RAISE EXCEPTION 'a pending one restored'; EXCEPTION WHEN SQLSTATE 'JD409' THEN NULL; END;
+  PERFORM dashboard_email_dismiss((SELECT id FROM email_suggestions WHERE message_id = 'in6'));
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, flags)
+  VALUES (j1, 'in9', now(), 'acme.com', 'Invite 2', 'schedule a call', 'interview', 'interview', 'applied', 'medium', 'rules', '{}');
+  BEGIN PERFORM dashboard_email_restore((SELECT id FROM email_suggestions WHERE message_id = 'in6')); RAISE EXCEPTION 'restored over another pending one';
+  EXCEPTION WHEN SQLSTATE 'JD409' THEN NULL; END;
+  ASSERT (SELECT state FROM email_suggestions WHERE message_id = 'in6') = 'dismissed', 'and stays dismissed';
+
+  -- an accepted suggestion the job moved past (not undone: its history entry is still there) can be reviewed again, with no entry attached
+  UPDATE email_suggestions SET state = 'dismissed', decided_at = now() WHERE job_id = j7 AND state = 'pending';
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, flags)
+  VALUES (j7, 'in11', now(), 'delta.com', 'Thanks again', 'thank you for applying', 'acknowledgement', 'applied', 'none', 'high', 'rules', '{}');
+  r := dashboard_email_accept((SELECT id FROM email_suggestions WHERE message_id = 'in11'), 'shortlisted');
+  ASSERT (SELECT event_id IS NOT NULL FROM email_suggestions WHERE message_id = 'in11'), 'accepted with its history entry';
+  PERFORM dashboard_set_status(j7, 'rejected', 'applied');
+  it := (SELECT x FROM jsonb_array_elements(dashboard_email_inbox('accepted')->'items') x WHERE x->>'subject' = 'Thanks again');
+  ASSERT (it->>'can_restore') = 'true' AND (it->>'can_undo') = 'false', 'the job moved on, so it can be reviewed again: ' || it::text;
+  PERFORM dashboard_email_restore((it->>'id')::bigint);
+  ASSERT (SELECT state = 'pending' AND event_id IS NULL AND decided_at IS NULL FROM email_suggestions WHERE message_id = 'in11'), 'pending again, with no history entry attached';
+
+  -- the Health alerts, only while the part is on
+  UPDATE gmail_state SET token_status = 'expired', early_stops = 0;
+  ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(dashboard_health()->'alerts') a WHERE a->>'code' = 'gmail_login' AND a->>'level' = 'bad'), 'an expired login is an alert';
+  UPDATE gmail_state SET token_status = 'ok', early_stops = 3;
+  ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(dashboard_health()->'alerts') a WHERE a->>'code' = 'gmail_stalled' AND a->>'level' = 'warn')
+     AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(dashboard_health()->'alerts') a WHERE a->>'code' = 'gmail_login'), 'runs that keep ending early are another';
+  UPDATE gmail_state SET early_stops = 2;
+  ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(dashboard_health()->'alerts') a WHERE a->>'code' IN ('gmail_stalled', 'gmail_login')), 'two early runs are not an alert';
+  UPDATE gmail_state SET token_status = 'expired', early_stops = 9;
+  UPDATE feature_settings SET gmail = false;
+  ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(dashboard_health()->'alerts') a WHERE a->>'code' IN ('gmail_stalled', 'gmail_login')), 'nothing about mail while the part is off';
+  UPDATE feature_settings SET gmail = true;
+  UPDATE gmail_state SET token_status = 'ok', early_stops = 0;
+END $$;
+
+DO $$
+DECLARE sid bigint; n int;
+BEGIN
+  INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal, confidence, source, flags)
+  SELECT id, 'role1', now(), 'x.com', 's', 'e', 'acknowledgement', 'applied', 'none', 'high', 'rules', '{}' FROM jobs WHERE company LIKE 'DashCo 7008%' LIMIT 1;
+  SET LOCAL ROLE jobsearch_dashboard;
+  -- what the role may do
+  PERFORM dashboard_email_inbox('pending', 5); PERFORM dashboard_email_count();
+  -- what it may not
+  BEGIN PERFORM 1 FROM email_suggestions; RAISE EXCEPTION 'the role read the suggestions table'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM 1 FROM gmail_seen; RAISE EXCEPTION 'the role read gmail_seen'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM 1 FROM gmail_state; RAISE EXCEPTION 'the role read gmail_state'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE email_suggestions SET state = 'accepted'; RAISE EXCEPTION 'the role wrote the suggestions table'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM email_transition_ok('interview', 'applied'); RAISE EXCEPTION 'the role ran a helper'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN PERFORM gmail_digest(1); RAISE EXCEPTION 'the role ran the digest function'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RESET ROLE;
+  ASSERT has_function_privilege('jobsearch_dashboard', 'dashboard_email_accept(bigint, text, boolean)', 'EXECUTE')
+     AND has_function_privilege('jobsearch_dashboard', 'dashboard_email_dismiss(bigint)', 'EXECUTE')
+     AND has_function_privilege('jobsearch_dashboard', 'dashboard_email_restore(bigint)', 'EXECUTE')
+     AND NOT has_function_privilege('public', 'dashboard_email_accept(bigint, text, boolean)', 'EXECUTE')
+     AND NOT has_function_privilege('public', 'dashboard_email_inbox(text, int)', 'EXECUTE')
+     AND NOT has_function_privilege('jobsearch_dashboard', 'email_needs_ack(text[], text)', 'EXECUTE'), 'grants: the five functions to the role, nothing to PUBLIC';
+  -- the functions are pinned to a safe search_path
+  ASSERT (SELECT bool_and(p.prosecdef AND p.proconfig @> ARRAY['search_path=public, pg_temp']) FROM pg_proc p
+           WHERE p.proname IN ('dashboard_email_inbox', 'dashboard_email_count', 'dashboard_email_accept', 'dashboard_email_dismiss', 'dashboard_email_restore')), 'security definer with a pinned search_path';
 END $$;
 
 ROLLBACK;

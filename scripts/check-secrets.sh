@@ -72,6 +72,10 @@ scan() {  # scan LABEL REGEX
   scan "a private key" '-----BEGIN [A-Z ]*PRIVATE KEY-----'
   scan "a JSON web token" 'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}'
   scan "a Google API key" 'AIza[0-9A-Za-z_-]{35}'
+  scan "a Google OAuth client secret" 'GOCSPX-[0-9A-Za-z_-]{28}'
+  scan "a Google OAuth refresh token" '1//[0-9A-Za-z_-]{40,}'
+  scan "a Google OAuth access token" 'ya29\.[0-9A-Za-z_-]{60,}'
+  scan "a Google OAuth client id" '[0-9]{10,}-[0-9a-z]{28,}\.apps\.googleusercontent\.com'
 } > ${TMPDIR:-/tmp}/.check-secrets.$$
 if [ -s ${TMPDIR:-/tmp}/.check-secrets.$$ ]; then
   while IFS= read -r line; do note "$line"; done < ${TMPDIR:-/tmp}/.check-secrets.$$
@@ -92,7 +96,7 @@ for f in $bin; do note "FILE $f: a binary file, which this check cannot read: op
 
 # 3. .env.example must hold no real value for a secret
 if echo "$files" | grep -qx '.env.example'; then
-  bad=$(grep -nE '^(ANTHROPIC_API_KEY|TELEGRAM_BOT_TOKEN|APIFY_TOKEN_[A-Z]+|DASHBOARD_PASSWORD|DASHBOARD_SECRET|DASHBOARD_DB_PASSWORD)=.+' .env.example | cut -d: -f1)
+  bad=$(grep -nE '^(ANTHROPIC_API_KEY|TELEGRAM_BOT_TOKEN|APIFY_TOKEN_[A-Z]+|DASHBOARD_PASSWORD|DASHBOARD_SECRET|DASHBOARD_DB_PASSWORD|GMAIL_CLIENT_ID|GMAIL_CLIENT_SECRET|GMAIL_REFRESH_TOKEN)=.+' .env.example | cut -d: -f1)
   for n in $bad; do note ".env.example:$n gives a secret a value (it must stay empty)"; done
 fi
 

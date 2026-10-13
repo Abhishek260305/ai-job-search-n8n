@@ -4,7 +4,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## 00 Scheduler\nEvery 5 minutes: asks the service which stages are due (`POST /schedule/tick`) and starts those workflows (01 collect, 02 score, 03 digest, 04 tailor). **When and how much is a setting, not an edit here:**\n\n```\nscripts/jobsearch schedule                      # what runs when\nscripts/jobsearch schedule set collect --every 6h\nscripts/jobsearch schedule run collect\n```\n\nA stage is claimed (marked as started) before it is launched, so two ticks can never start it twice. Stages whose feature is switched off (tailoring, digest) are left alone and start promptly when switched on. Nothing to configure in this workflow. See docs/customization.md.",
+        "content": "## 00 Scheduler\nEvery 5 minutes: asks the service which stages are due (`POST /schedule/tick`) and starts those workflows (01 collect, 02 score, 03 digest, 04 tailor, 06 mail). **When and how much is a setting, not an edit here:**\n\n```\nscripts/jobsearch schedule                      # what runs when\nscripts/jobsearch schedule set collect --every 6h\nscripts/jobsearch schedule run collect\n```\n\nA stage is claimed (marked as started) before it is launched, so two ticks can never start it twice. Stages whose feature is switched off (tailoring, digest, gmail) are left alone and start promptly when switched on. Nothing to configure in this workflow. See docs/customization.md.",
         "height": 330,
         "width": 420,
         "color": 7

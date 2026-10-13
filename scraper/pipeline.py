@@ -196,17 +196,50 @@ def format_followups(rows: list[dict], today: Optional[date] = None) -> str:
     return "\n".join(lines)
 
 
+MAIL_SHOWN = 5
+_SIGNAL_WORDS = {"acknowledgement": "the application was received", "assessment": "an assessment to take", "interview": "an interview invitation",
+                 "offer": "an OFFER", "rejection": "a rejection"}
+_CARE_FLAGS = ("phishing_risk", "unverified_sender", "sender_domain_not_the_company", "free_mail_sender", "suspicious_link", "scam_pattern",
+               "injection_attempt", "markup_doubt", "conflict")
+
+
+def format_mail(gmail: Optional[dict]) -> str:
+    """What the daily message says about the optional Gmail part, or "" when there is nothing: the new suggestions (the company and
+    job from your own list, what the reply looks like, what it would change, how sure; never the subject or the text of the email) and,
+    once, that the Google login stopped working. Suggestions are only proposals: nothing changes until you accept one."""
+    if not gmail:
+        return ""
+    lines = []
+    new = gmail.get("suggestions") or []
+    total = max(len(new), int(gmail.get("total_new") or 0))
+    if new:
+        lines.append(f"\U0001F4EC Email replies ({total} new suggestion{'s' if total != 1 else ''}, nothing is changed until you accept):")
+        for r in new[:MAIL_SHOWN]:
+            care = any(f in (r.get("flags") or []) for f in _CARE_FLAGS)
+            how = f"{r.get('confidence')} confidence" + (", CHECK THE SENDER" if care else "") + (", model-read" if r.get("source") == "model" else "")
+            lines.append(f"- {_cut(r.get('company'), _CUT['company'])} ({_cut(r.get('title'), _CUT['title'])}): looks like "
+                         f"{_SIGNAL_WORDS.get(r.get('signal'), 'a reply')} -> {r.get('proposed_status')} [{how}]")
+        if total > MAIL_SHOWN:
+            lines.append(f"... and {total - MAIL_SHOWN} more")
+    if gmail.get("login_alert"):
+        lines.append("\u26A0 The Gmail login stopped working: no replies are being read. Sign in again with scripts/jobsearch gmail login")
+    return "\n".join(lines)
+
+
 def format_digest(rows: list[dict], today: Optional[date] = None, spend: Optional[dict] = None,
-                  followups: Optional[list[dict]] = None) -> dict:
+                  followups: Optional[list[dict]] = None, gmail: Optional[dict] = None) -> dict:
     """The shortlist message. `spend` (a budget status) adds a footer, and an alert line that is sent
     on its own even when there are no new matches (so a paused pipeline is never silent). `followups` (only when the
     user asked for them) adds a reminder section, which is also sent on its own when there are no new matches."""
     today = today or date.today()
     alert = budget.alert_text(spend) if spend else ""
     follow = format_followups(followups or [], today)
+    mail_text = format_mail(gmail)
+    sent = {"suggestion_ids": [r["id"] for r in (gmail or {}).get("suggestions", [])[:MAIL_SHOWN]], "login_alert": bool((gmail or {}).get("login_alert"))}
+    follow = "\n\n".join(part for part in (follow, mail_text) if part)          # reminders and mail replies: sent with the shortlist, or on their own
     if not rows:
         text = "\n\n".join(part for part in (follow, alert) if part)
-        return {"count": 0, "ids": [], "text": text, "html": html_lib.escape(text, quote=False), "alert": alert}
+        return {"count": 0, "ids": [], "text": text, "html": html_lib.escape(text, quote=False), "alert": alert, "gmail": sent}
     lines = [f"\U0001F3AF {len(rows)} new match{'es' if len(rows) != 1 else ''} above your threshold", ""]
     shown: list[int] = []
     for i, r in enumerate(rows, 1):
@@ -232,11 +265,11 @@ def format_digest(rows: list[dict], today: Optional[date] = None, spend: Optiona
     if spend:
         text += "\n\n" + (alert + "\n" if alert else "") + budget.footer_text(spend)
     # Telegram's HTML mode needs &, < and > escaped; titles and URLs come from third-party postings.
-    return {"count": len(shown), "ids": shown, "text": text, "html": html_lib.escape(text, quote=False), "alert": alert}
+    return {"count": len(shown), "ids": shown, "text": text, "html": html_lib.escape(text, quote=False), "alert": alert, "gmail": sent}
 
 
 def digest(store, limit: int = 10, today: Optional[date] = None) -> dict:
-    return format_digest(store.digest_rows(limit), today, store.budget_status(), store.follow_ups_for_digest())
+    return format_digest(store.digest_rows(limit), today, store.budget_status(), store.follow_ups_for_digest(), store.gmail_digest(MAIL_SHOWN))
 
 
 def sweep(store) -> dict:

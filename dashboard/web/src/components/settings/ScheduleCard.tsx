@@ -13,7 +13,7 @@ import { formatDateTime, formatRelative } from '@/lib/format'
 import { stageLabel } from '@/lib/ops'
 import { everyHint, isEmpty, scheduleChanges, scheduleForm, type ScheduleForm, type Unit } from '@/lib/settingsForm'
 
-const WORK: Record<string, string> = { collect: 'Searches per run', score: 'Jobs per run', tailor: 'Applications per run', digest: 'Matches per message' }
+const WORK: Record<string, string> = { collect: 'Searches per run', score: 'Jobs per run', tailor: 'Applications per run', digest: 'Matches per message', mail: 'Emails opened per run' }
 
 function RunNow({ name, paused, featureOff }: { name: ScheduleSetting['name']; paused: boolean; featureOff: boolean }) {
   const run = useRunSchedule(name)

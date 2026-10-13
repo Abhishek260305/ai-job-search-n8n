@@ -16,12 +16,15 @@ import app as A  # noqa: E402
 import pipeline  # noqa: E402
 
 TG_ENV = {"TELEGRAM_BOT_TOKEN": "123:abc", "TELEGRAM_CHAT_ID": "424242"}
+GMAIL_ENV = {"GMAIL_CLIENT_ID": "id.apps.example", "GMAIL_CLIENT_SECRET": "not-a-real-secret", "GMAIL_REFRESH_TOKEN": "not-a-real-token"}
 
 
 class Store:
-    def __init__(self, tailoring=True, telegram=True, digest=True, approval="review"):
-        self.flags = {"tailoring": tailoring, "telegram": telegram, "digest": digest}
+    def __init__(self, tailoring=True, telegram=True, digest=True, approval="review", gmail=False):
+        self.flags = {"tailoring": tailoring, "telegram": telegram, "digest": digest, "gmail": gmail}
         self.approval = approval
+        self.gmail_state = {"lookback_days": 60, "from_now": False, "search_cursor": None, "token_status": "none", "token_checked_at": None,
+                            "last_run_at": None, "last_error": None, "messages_seen": 0, "pending": 0, "accepted": 0, "dismissed": 0}
 
     def features(self): return dict(self.flags)
 
@@ -31,9 +34,23 @@ class Store:
 
     def tailor_settings(self): return {"approval": self.approval}
 
+    # gmail
+    def gmail_overview(self): return dict(self.gmail_state)
+
+    def update_gmail_settings(self, **kw):
+        self.gmail_state.update(kw)
+        return self.gmail_overview()
+
+    login: list = []
+
+    def record_gmail_login(self, status, error, *, ran=False):
+        self.login = [*self.login, (status, error, ran)]
+        self.gmail_state.update(token_status=status, last_error=error)
+
     # schedules
     ROWS = {"collect": {"name": "collect", "batch": 18, "model": None}, "score": {"name": "score", "batch": 10, "model": "claude-haiku-5-5"},
-            "tailor": {"name": "tailor", "batch": 3, "model": None}, "digest": {"name": "digest", "batch": 10, "model": None}}
+            "tailor": {"name": "tailor", "batch": 3, "model": None}, "digest": {"name": "digest", "batch": 10, "model": None},
+            "mail": {"name": "mail", "batch": 20, "model": None}}
 
     def board_batch(self): return 30
 
@@ -97,11 +114,14 @@ class Bot:
 
 @pytest.fixture
 def env(monkeypatch):
-    def setup(store, telegram_env=True):
-        for k in TG_ENV:
+    def setup(store, telegram_env=True, gmail_env=False):
+        for k in (*TG_ENV, *GMAIL_ENV):
             monkeypatch.delenv(k, raising=False)
         if telegram_env:
             for k, v in TG_ENV.items():
+                monkeypatch.setenv(k, v)
+        if gmail_env:
+            for k, v in GMAIL_ENV.items():
                 monkeypatch.setenv(k, v)
         monkeypatch.setattr(A, "get_store", lambda: store)
         return TestClient(A.app)
@@ -113,7 +133,7 @@ def env(monkeypatch):
 def test_features_report_shows_flags_effective_state_and_how_approval_behaves(env):
     c = env(Store(), telegram_env=False)
     body = c.get("/features").json()
-    assert body["flags"] == {"tailoring": True, "telegram": True, "digest": True}
+    assert body["flags"] == {"tailoring": True, "telegram": True, "digest": True, "gmail": False}
     assert body["effective"]["telegram"]["on"] is False and "not configured" in body["effective"]["telegram"]["reason"]
     assert body["approval"] == "review" and body["approval_effective"] == "auto", "no Telegram: review behaves as auto"
     assert any("review → behaves as auto" in line for line in body["lines"])
@@ -123,7 +143,7 @@ def test_features_set_changes_only_what_was_given(env):
     store = Store()
     c = env(store)
     body = c.post("/features", json={"tailoring": False}).json()
-    assert store.flags == {"tailoring": False, "telegram": True, "digest": True}
+    assert store.flags == {"tailoring": False, "telegram": True, "digest": True, "gmail": False}
     assert body["effective"]["tailoring"]["on"] is False and body["effective"]["telegram"]["on"] is True
     assert c.post("/features", json={}).status_code == 200 and store.flags["tailoring"] is False, "an empty request changes nothing"
 
@@ -140,7 +160,7 @@ def test_the_scheduled_run_is_a_quiet_noop_when_tailoring_is_off(env, monkeypatc
 def test_an_explicit_request_gets_an_explicit_refusal_when_tailoring_is_off(env, monkeypatch):
     monkeypatch.setattr(A, "_tailor_service", lambda s: pytest.fail("no service"))
     r = env(Store(tailoring=False)).post("/tailor/run", json={"job_id": 24})
-    assert r.status_code == 409 and "features set tailoring on" in r.json()["detail"]["errors"][0]
+    assert r.status_code == 409 and "features set --tailoring on" in r.json()["detail"]["errors"][0]
 
 
 def test_the_bot_refuses_to_tailor_when_tailoring_is_off(monkeypatch):
@@ -201,7 +221,7 @@ def test_the_digest_is_built_when_it_can_be_sent(env, monkeypatch):
 
 
 def test_polling_does_nothing_and_says_why_when_telegram_is_off(env):
-    assert env(Store(telegram=False)).post("/telegram/poll").json() == {"telegram": "switched off (jobsearch features set telegram on)", "updates": 0}
+    assert env(Store(telegram=False)).post("/telegram/poll").json() == {"telegram": "switched off (jobsearch features set --telegram on)", "updates": 0}
     body = env(Store(), telegram_env=False).post("/telegram/poll").json()
     assert body["updates"] == 0 and "not configured" in body["telegram"]
 
@@ -209,25 +229,38 @@ def test_polling_does_nothing_and_says_why_when_telegram_is_off(env):
 # ------------------------------------------------------------------ schedules
 
 def test_the_tick_claims_everything_when_all_parts_are_on(env):
-    store = Store()
-    body = env(store).post("/schedule/tick").json()
-    assert [d["name"] for d in body["due"]] == ["collect", "score", "tailor", "digest"] and body["skipped"] == []
+    store = Store(gmail=True)
+    body = env(store, gmail_env=True).post("/schedule/tick").json()
+    assert [d["name"] for d in body["due"]] == ["collect", "score", "tailor", "digest", "mail"] and body["skipped"] == []
     assert body["due"][1] == {"name": "score", "batch": 10, "model": "claude-haiku-5-5"}
+    assert body["due"][4] == {"name": "mail", "batch": 20, "model": None}
+
+
+def test_the_mail_stage_is_not_claimed_until_gmail_is_switched_on_and_configured(env):
+    store = Store()                                                  # the default: Gmail off
+    body = env(store, gmail_env=True).post("/schedule/tick").json()
+    assert store.skipped == ["mail"] and "mail" not in [d["name"] for d in body["due"]]
+    store = Store(gmail=True)                                         # switched on but no Google login in .env
+    env(store, gmail_env=False).post("/schedule/tick")
+    assert store.skipped == ["mail"], "unconfigured behaves like switched off, so it fires promptly once it is set up"
+    store = Store(gmail=True)
+    env(store, gmail_env=True).post("/schedule/tick")
+    assert store.skipped == []
 
 
 def test_the_tick_leaves_switched_off_stages_alone(env):
-    store = Store(tailoring=False)
-    body = env(store).post("/schedule/tick").json()
+    store = Store(tailoring=False, gmail=True)
+    body = env(store, gmail_env=True).post("/schedule/tick").json()
     assert store.skipped == ["tailor"] and "tailor" not in [d["name"] for d in body["due"]]
-    store = Store(telegram=False)
-    env(store).post("/schedule/tick")
+    store = Store(telegram=False, gmail=True)
+    env(store, gmail_env=True).post("/schedule/tick")
     assert store.skipped == ["digest"], "no Telegram: the digest is not even claimed, so it fires when Telegram is back"
-    store = Store(tailoring=False, digest=False)
-    env(store).post("/schedule/tick")
+    store = Store(tailoring=False, digest=False, gmail=True)
+    env(store, gmail_env=True).post("/schedule/tick")
     assert sorted(store.skipped) == ["digest", "tailor"]
-    env(Store(), telegram_env=False).post("/schedule/tick")           # unconfigured behaves like switched off
-    store = Store()
-    env(store, telegram_env=False).post("/schedule/tick")
+    env(Store(gmail=True), telegram_env=False, gmail_env=True).post("/schedule/tick")           # unconfigured behaves like switched off
+    store = Store(gmail=True)
+    env(store, telegram_env=False, gmail_env=True).post("/schedule/tick")
     assert store.skipped == ["digest"]
 
 
@@ -272,7 +305,7 @@ def test_changing_a_schedule(env):
     c = env(store)
     r = c.post("/schedule/collect", json={"every_minutes": 360, "batch": 18})
     assert r.status_code == 200 and store.updated == ("collect", {"every_minutes": 360, "batch": 18})
-    assert r.json()["timezone"] == "Asia/Kolkata" and len(r.json()["schedules"]) == 4 and len(r.json()["lines"]) == 4
+    assert r.json()["timezone"] == "Asia/Kolkata" and len(r.json()["schedules"]) == 5 and len(r.json()["lines"]) == 5
     assert c.post("/schedule/digest", json={"at_time": "7:30"}).status_code == 200 and store.updated == ("digest", {"at_time": "07:30", "every_minutes": None})
     assert c.post("/schedule/digest", json={"every_minutes": 360}).status_code == 200 and store.updated == ("digest", {"every_minutes": 360, "at_time": None})
 
@@ -446,3 +479,246 @@ def test_the_schedule_report_tells_how_many_boards_collect_visits_per_run(env):
     assert rows["collect"]["board_batch"] == 30
     assert all("board_batch" not in r for n, r in rows.items() if n != "collect")
 
+
+
+# ------------------------------------------------------------------ the optional Gmail part (Phase 6, step 6a)
+
+def test_the_gmail_switch_is_in_the_features_report_and_off_by_default(env):
+    body = env(Store(), gmail_env=True).get("/features").json()
+    assert body["flags"]["gmail"] is False
+    assert body["effective"]["gmail"] == {"on": False, "reason": "switched off (jobsearch features set --gmail on)"}
+    assert any(line.startswith("gmail:") and "off" in line for line in body["lines"])
+
+
+def test_switching_gmail_on_needs_the_google_login_to_be_in_effect(env):
+    store = Store()
+    c = env(store, gmail_env=False)
+    body = c.post("/features", json={"gmail": True}).json()
+    assert store.flags["gmail"] is True and body["flags"]["gmail"] is True
+    assert body["effective"]["gmail"]["on"] is False and "not configured" in body["effective"]["gmail"]["reason"]
+    store = Store()
+    body = env(store, gmail_env=True).post("/features", json={"gmail": True}).json()
+    assert body["effective"]["gmail"] == {"on": True, "reason": ""}
+    assert c.post("/features", json={"gmail": "perhaps"}).status_code == 422
+
+
+def test_switching_gmail_does_not_touch_the_other_parts(env):
+    store = Store()
+    env(store).post("/features", json={"gmail": True})
+    assert store.flags == {"tailoring": True, "telegram": True, "digest": True, "gmail": True}
+
+
+def test_the_mail_status_of_a_fresh_install(env):
+    body = env(Store(), gmail_env=False).get("/mail/status").json()
+    assert body["enabled"] is False and body["configured"] is False and "switched off" in body["reason"]
+    assert body["lookback_days"] == 60 and body["from_now"] is False and body["search_cursor"] is None
+    assert body["pending"] == 0 and body["messages_seen"] == 0
+    assert any("the first search looks back 60 days" in line for line in body["lines"])
+    assert any("not set up" in line for line in body["lines"])
+
+
+def test_the_mail_status_when_it_is_on_and_configured(env):
+    body = env(Store(gmail=True), gmail_env=True).get("/mail/status").json()
+    assert body["enabled"] is True and body["configured"] is True and body["reason"] == ""
+    assert any("set in .env, not used yet" in line for line in body["lines"])
+
+
+def test_the_mail_status_never_returns_the_login_values(env):
+    text = env(Store(gmail=True), gmail_env=True).get("/mail/status").text
+    for value in GMAIL_ENV.values():
+        assert value not in text
+
+
+def test_mail_settings_are_changed_one_at_a_time_and_validated(env):
+    store = Store()
+    c = env(store)
+    body = c.post("/mail/settings", json={"lookback_days": 30}).json()
+    assert store.gmail_state["lookback_days"] == 30 and body["lookback_days"] == 30
+    assert any("looks back 30 days" in line for line in body["lines"])
+    body = c.post("/mail/settings", json={"from_now": True}).json()
+    assert store.gmail_state["from_now"] is True and store.gmail_state["lookback_days"] == 30, "the other setting is kept"
+    assert any("fetches nothing" in line for line in body["lines"])
+
+
+@pytest.mark.parametrize("body,message", [
+    ({"lookback_days": 0}, "from 1 to 365"), ({"lookback_days": 366}, "from 1 to 365"), ({}, "nothing to change"),
+    ({"token_status": "ok"}, "nothing to change"), ({"search_cursor": "2026-01-01"}, "nothing to change")])
+def test_a_bad_mail_settings_change_is_refused_and_changes_nothing(env, body, message):
+    store = Store()
+    before = dict(store.gmail_state)
+    r = env(store).post("/mail/settings", json=body)
+    assert r.status_code == 422 and message in r.json()["detail"]["errors"][0]
+    assert store.gmail_state == before
+
+
+@pytest.mark.parametrize("value", ["soon", True, 2.5, [1]])
+def test_mail_settings_types_are_checked(env, value):
+    store = Store()
+    assert env(store).post("/mail/settings", json={"lookback_days": value}).status_code == 422
+    assert store.gmail_state["lookback_days"] == 60
+
+
+def test_the_mail_stage_is_a_quiet_noop_with_a_reason_when_off(env):
+    store = Store()
+    calls = []
+    store.gmail_overview = lambda: calls.append("read") or {}
+    body = env(store).post("/mail/run").json()
+    assert body == {"skipped": "switched off (jobsearch features set --gmail on)", "checked": 0} and calls == [], "nothing is read while it is off"
+
+
+@pytest.fixture
+def google(monkeypatch):
+    """A stand-in Google login and Gmail API whose credentials are the ones in GMAIL_ENV."""
+    import gmail_client
+    import stubs
+    monkeypatch.setattr(gmail_client, "RETRY_DELAY_S", 0)
+    with stubs.StubGmail(refresh_token=GMAIL_ENV["GMAIL_REFRESH_TOKEN"], client_id=GMAIL_ENV["GMAIL_CLIENT_ID"], client_secret=GMAIL_ENV["GMAIL_CLIENT_SECRET"]) as s:
+        monkeypatch.setenv("GMAIL_API_URL", s.url)
+        yield s
+
+
+def test_the_mail_stage_runs_with_the_mail_schedules_batch_and_model_when_on(env, google, monkeypatch):
+    store = Store(gmail=True)
+    calls = []
+    monkeypatch.setattr(A.mail, "run_stage", lambda eff, s, e, **kw: calls.append((eff["on"], kw)) or {"checked": 7, "suggested": 1, "login": "ok"})
+    body = env(store, gmail_env=True).post("/mail/run").json()
+    assert body == {"checked": 7, "suggested": 1, "login": "ok"} and len(calls) == 1
+    assert calls[0][0] is True and calls[0][1]["batch"] == store.schedule_row("mail")["batch"] and "model" in calls[0][1]
+
+
+def test_a_second_mail_run_while_one_is_going_is_refused_not_queued(env, monkeypatch):
+    store = Store(gmail=True)
+    client = env(store, gmail_env=True)
+    inner = []
+    def slow_stage(eff, s, e, **kw):
+        inner.append(client.post("/mail/run").json())          # a second request arrives while the first is still running
+        return {"checked": 0, "login": "ok"}
+    monkeypatch.setattr(A.mail, "run_stage", slow_stage)
+    outer = client.post("/mail/run").json()
+    assert outer == {"checked": 0, "login": "ok"} and inner == [{"skipped": "a mail run is already in progress", "checked": 0}]
+    assert client.post("/mail/run").status_code == 200, "the lock is released afterwards"
+
+
+def test_the_mail_stage_says_what_is_missing_when_on_but_not_configured(env):
+    body = env(Store(gmail=True), gmail_env=False).post("/mail/run").json()
+    assert body["checked"] == 0 and "not configured" in body["skipped"]
+
+
+def test_the_mail_stage_makes_no_google_call_while_the_part_is_off(env, google):
+    body = env(Store(), gmail_env=True).post("/mail/run").json()
+    assert "switched off" in body["skipped"] and google.token_requests == [] and google.api_log == []
+
+
+def test_the_mail_stage_reports_an_expired_login(env, google):
+    google.modes["token"] = "invalid_grant"
+    store = Store(gmail=True)
+    body = env(store, gmail_env=True).post("/mail/run").json()
+    assert body["login"] == "expired" and "sign in again" in body["skipped"] and store.login[0][0] == "expired"
+
+
+def test_checking_the_login_works_before_the_part_is_switched_on(env, google):
+    store = Store()                                                       # Gmail is off
+    body = env(store, gmail_env=True).post("/mail/check").json()
+    assert body["status"] == "ok" and body["account"] == "j***@gmail.com"
+    assert body["enabled"] is False, "the part is still switched off: checking the login does not switch anything on"
+    assert store.login == [("ok", None, False)]
+    assert any("never run" in l or "last started" in l for l in body["lines"])
+
+
+def test_checking_a_login_that_is_not_set_up_is_a_409_that_names_the_missing_values(env, google):
+    r = env(Store(), gmail_env=False).post("/mail/check")
+    assert r.status_code == 409 and "GMAIL_CLIENT_ID" in r.json()["detail"]["errors"][0] and google.token_requests == []
+
+
+def test_checking_a_bad_login_reports_it_and_records_it(env, google):
+    google.modes["token"] = "overbroad"
+    store = Store()
+    body = env(store, gmail_env=True).post("/mail/check").json()
+    assert body["status"] == "error" and "read-only" in body["message"] and store.login[0][0] == "error"
+
+
+def test_no_credential_or_full_address_is_in_any_mail_response(env, google):
+    c = env(Store(gmail=True), gmail_env=True)
+    text = c.post("/mail/check").text + c.post("/mail/run").text + c.get("/mail/status").text
+    for value in (*GMAIL_ENV.values(), "jane.doe@gmail.com", google.issued[0]):
+        assert value not in text
+
+
+def test_an_old_database_gets_a_clear_message_not_a_crash(env):
+    """The store raises LookupError for a database without the Gmail tables (tests/test_premigration.py checks the real store
+    does, for each of these calls); the endpoints turn it into a 400 that says what to do."""
+    def missing(*a, **k):
+        raise LookupError("the Gmail tables are not there yet: run scripts/jobsearch migrate")
+    cases = [("gmail_overview", lambda c: c.get("/mail/status")),
+             ("gmail_overview", lambda c: c.post("/mail/settings", json={"lookback_days": 5})),     # it reports back after the change
+             ("update_gmail_settings", lambda c: c.post("/mail/settings", json={"lookback_days": 5}))]
+    for method, call in cases:
+        store = Store()
+        setattr(store, method, missing)
+        r = call(env(store))
+        assert r.status_code == 400 and "scripts/jobsearch migrate" in r.json()["detail"]["errors"][0], method
+
+
+def test_switching_gmail_on_for_a_database_without_the_switch_is_a_clear_400(env):
+    store = Store()
+    def refuse(**kw):
+        raise LookupError("this database has no Gmail switch yet: run scripts/jobsearch migrate")
+    store.update_features = refuse
+    r = env(store).post("/features", json={"gmail": True})
+    assert r.status_code == 400 and "scripts/jobsearch migrate" in r.json()["detail"]["errors"][0]
+
+
+def test_the_status_report_works_with_the_timestamps_the_database_really_returns(env):
+    """gmail_overview() is a jsonb report: its timestamps are ISO strings. This was a 503 (datetime - str)."""
+    store = Store(gmail=True)
+    store.gmail_state.update(search_cursor="2026-10-12T11:40:00.5+00:00", last_run_at="2026-10-12T11:41:00+00:00",
+                             token_status="ok", token_checked_at="2026-10-12T11:41:00.123456+00:00")
+    r = env(store, gmail_env=True).get("/mail/status")
+    assert r.status_code == 200 and any("last started" in line for line in r.json()["lines"])
+    assert any("works (checked" in line for line in r.json()["lines"])
+
+
+def test_the_mail_schedule_can_be_changed_like_the_others(env):
+    store = Store()
+    c = env(store)
+    assert c.post("/schedule/mail", json={"every_minutes": 60, "batch": 10}).status_code == 200 and store.updated == ("mail", {"every_minutes": 60, "batch": 10})
+    r = c.post("/schedule/mail", json={"every_minutes": 5})
+    assert r.status_code == 422 and "kept gentle on Gmail" in r.json()["detail"]["errors"][0]
+    assert c.post("/schedule/mail/run").status_code == 200 and store.run_requested == "mail"
+
+
+def test_a_rescan_reopens_old_mail_and_reports_the_state(env):
+    store = Store()
+    store.gmail_rescan = lambda: 7
+    body = env(store).post("/mail/rescan").json()
+    assert body["reopened"] == 7 and body["lookback_days"] == 60 and any("search" in line for line in body["lines"])
+
+
+def test_a_rescan_on_an_old_database_is_a_clear_message(env):
+    store = Store()
+    def missing():
+        raise LookupError("this database has no Gmail search yet: run scripts/jobsearch migrate")
+    store.gmail_rescan = missing
+    r = env(store).post("/mail/rescan")
+    assert r.status_code == 400 and "scripts/jobsearch migrate" in r.json()["detail"]["errors"][0]
+
+
+
+# ------------------------------------------------------------------ /digest/sent marks what the message told you (step 6e)
+
+def test_digest_sent_marks_the_jobs_and_the_mail_suggestions_it_announced(env):
+    store = Store()
+    store.marked, store.mail_marked = [], []
+    store.mark_notified = lambda ids: store.marked.append(ids) or len(ids)
+    store.gmail_digest_sent = lambda ids, login=False: store.mail_marked.append((list(ids), login)) or len(ids)
+    body = env(store).post("/digest/sent", json={"ids": [1, 2], "suggestion_ids": [7, 8, 9], "login_alert": True}).json()
+    assert body == {"marked": 2, "mail_marked": 3} and store.marked == [[1, 2]] and store.mail_marked == [([7, 8, 9], True)]
+
+
+def test_digest_sent_from_the_old_workflow_sends_only_ids_and_touches_no_mail(env):
+    store = Store()
+    store.mail_marked = []
+    store.mark_notified = lambda ids: len(ids)
+    store.gmail_digest_sent = lambda ids, login=False: store.mail_marked.append((ids, login)) or 0
+    body = env(store).post("/digest/sent", json={"ids": [4]}).json()
+    assert body == {"marked": 1, "mail_marked": 0} and store.mail_marked == []

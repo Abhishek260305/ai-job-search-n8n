@@ -33,6 +33,9 @@ class FakeStore:
     def budget_status(self):
         return self.budget
 
+    def gmail_digest(self, limit=5):
+        return None                      # a database without the Gmail part (or with it off): the digest says nothing about mail
+
     def pricing(self, model):
         return {"input_per_mtok": 0.10, "output_per_mtok": 0.50, "cache_write_per_mtok": 0.125, "cache_read_per_mtok": 0.01}
 
@@ -251,7 +254,7 @@ def test_digest_formats_matches_with_the_important_warnings():
 
 
 def test_digest_is_empty_when_there_is_nothing_new():
-    assert PL.format_digest([]) == {"count": 0, "ids": [], "text": "", "html": "", "alert": ""}
+    assert PL.format_digest([]) == {"count": 0, "ids": [], "text": "", "html": "", "alert": "", "gmail": {"suggestion_ids": [], "login_alert": False}}
 
 
 def test_digest_truncates_to_fit_telegram_and_only_marks_shown_jobs():
@@ -722,3 +725,69 @@ def test_any_other_database_error_is_not_hidden():
     store, _ = _store(psycopg.errors.OperationalError("connection lost"))
     with pytest.raises(psycopg.errors.OperationalError):
         store.follow_ups_for_digest()
+
+
+# ------------------------------------------------------------------ the mail section of the digest (Phase 6, step 6e)
+
+def mail_row(i, **kw):
+    return {"id": i, "company": "Acme Corp", "title": "Backend Engineer", "signal": "interview", "proposed_status": "interview",
+            "status_at_proposal": "applied", "confidence": "medium", "source": "rules", "flags": [], **kw}
+
+
+def test_nothing_about_mail_when_there_is_nothing_new_and_the_login_works():
+    assert PL.format_mail(None) == "" and PL.format_mail({"suggestions": [], "total_new": 0, "login_alert": False}) == ""
+    assert PL.format_digest([], date(2026, 10, 11), None, None, {"suggestions": [], "total_new": 0, "login_alert": False})["text"] == ""
+
+
+def test_new_suggestions_are_named_by_company_job_and_what_they_would_change_never_by_subject_or_text():
+    text = PL.format_mail({"suggestions": [mail_row(1), mail_row(2, company="Beta", signal="rejection", proposed_status="rejected", confidence="high", source="model")],
+                           "total_new": 2, "login_alert": False})
+    assert "2 new suggestions" in text and "nothing is changed until you accept" in text
+    assert "Acme Corp (Backend Engineer): looks like an interview invitation -> interview [medium confidence]" in text
+    assert "Beta" in text and "a rejection -> rejected [high confidence, model-read]" in text
+    assert "subject" not in text.lower() and "excerpt" not in text.lower()
+
+
+@pytest.mark.parametrize("flag", ["phishing_risk", "unverified_sender", "free_mail_sender", "suspicious_link", "markup_doubt", "conflict"])
+def test_a_suggestion_with_a_trust_flag_says_to_check_the_sender(flag):
+    assert "CHECK THE SENDER" in PL.format_mail({"suggestions": [mail_row(1, flags=[flag])], "total_new": 1, "login_alert": False})
+    assert "CHECK THE SENDER" not in PL.format_mail({"suggestions": [mail_row(1, flags=["classified_by_model", "date_from_email"])], "total_new": 1, "login_alert": False})
+
+
+def test_more_than_five_suggestions_are_counted_not_all_listed_and_only_the_listed_are_marked():
+    gmail = {"suggestions": [mail_row(i) for i in range(1, 6)], "total_new": 9, "login_alert": False}
+    d = PL.format_digest([], date(2026, 10, 11), None, None, gmail)
+    assert "9 new suggestions" in d["text"] and "and 4 more" in d["text"] and d["gmail"] == {"suggestion_ids": [1, 2, 3, 4, 5], "login_alert": False}
+
+
+def test_a_login_that_stopped_is_said_once_and_on_its_own_when_nothing_else_is_due():
+    d = PL.format_digest([], date(2026, 10, 11), None, None, {"suggestions": [], "total_new": 0, "login_alert": True})
+    assert "Gmail login stopped working" in d["text"] and "gmail login" in d["text"] and d["gmail"]["login_alert"] is True and d["count"] == 0
+
+
+def test_mail_rides_along_with_the_shortlist_and_the_reminders_and_text_stays_within_telegrams_limit():
+    rows = [row(i, strengths=["x" * 150], gaps=["y" * 150]) for i in range(1, 60)]
+    gmail = {"suggestions": [mail_row(i, title="T" * 200, company="C" * 200) for i in range(1, 6)], "total_new": 5, "login_alert": True}
+    d = PL.format_digest(rows, date(2026, 10, 11), None, [followup(1)], gmail)
+    assert len(d["text"]) <= 4096 and "Email replies" in d["text"] and "Follow up (1)" in d["text"] and d["count"] > 0
+
+
+def test_hostile_text_in_a_company_or_title_is_escaped_for_telegram():
+    d = PL.format_digest([], date(2026, 10, 11), None, None, {"suggestions": [mail_row(1, company="<b>Evil</b> & Co", title="<a href=x>t</a>")], "total_new": 1, "login_alert": False})
+    assert "<b>" not in d["html"] and "&lt;b&gt;" in d["html"]
+
+
+def test_the_digest_asks_the_store_for_mail():
+    class Store(FakeStore):
+        def gmail_digest(self, limit=5):
+            return {"suggestions": [mail_row(7)], "total_new": 1, "login_alert": False}
+        def budget_status(self):
+            return {"month_spent": 0, "monthly_cap": 10, "warn": False, "blocked": False, "blocked_reason": None}
+    d = PL.digest(Store(), 10, date(2026, 10, 11))
+    assert "Email replies" in d["text"] and d["gmail"]["suggestion_ids"] == [7]
+
+
+def test_only_the_suggestions_that_are_listed_are_marked_as_announced_even_if_the_store_returned_more():
+    gmail = {"suggestions": [mail_row(i) for i in range(1, 9)], "total_new": 8, "login_alert": False}
+    d = PL.format_digest([], date(2026, 10, 11), None, None, gmail)
+    assert d["gmail"]["suggestion_ids"] == [1, 2, 3, 4, 5] and d["text"].count("looks like") == 5

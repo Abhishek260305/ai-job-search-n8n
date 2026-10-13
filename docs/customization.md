@@ -112,6 +112,7 @@ scripts/jobsearch schedule set digest --at 07:30            # the digest, daily 
 scripts/jobsearch schedule set digest --every 6h            # or every N hours: a message whenever there are new matches
 scripts/jobsearch schedule set score --every 15m --batch 20 --model claude-haiku-5-5
 scripts/jobsearch schedule set tailor --off                 # pause one stage
+scripts/jobsearch schedule set mail --every 1h              # the Gmail stage (it only runs while that part is on)
 scripts/jobsearch schedule run collect                      # run it once now (starts within 5 minutes)
 scripts/jobsearch schedule timezone Asia/Kolkata            # times of day follow this timezone
 ```
@@ -144,6 +145,7 @@ scripts/jobsearch features                                   # what is on, and w
 scripts/jobsearch features set --tailoring off               # stop at scoring
 scripts/jobsearch features set --telegram off --digest off   # no Telegram, even if it is configured
 scripts/jobsearch features set --tailoring on                # turn it back on
+scripts/jobsearch features set --gmail on                    # the optional Gmail part (off by default; not built yet, see gmail.md)
 ```
 
 | Switch | On means | Off means (the fallback) |
@@ -151,6 +153,7 @@ scripts/jobsearch features set --tailoring on                # turn it back on
 | **tailoring** | shortlisted jobs get a tailored resume and cover letter (in `mode auto`, by themselves; in `mode manual`, when you ask) | the pipeline **stops at scoring**. Shortlisted jobs simply wait in the database with their score, strengths and gaps. No resume or cover-letter model calls are made, and `/tailor` explains that it is switched off. Use `jobs`, `job N`, `export` to see them. |
 | **telegram** | you get review messages, commands and (if the digest is on) the digest | no messages and no commands. Everything Telegram does has a CLI equivalent (below). It is also **off automatically** if `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` are not in `.env`, so you never have to touch it if you never set Telegram up. |
 | **digest** | a morning message lists new matches | no morning message. Telegram commands still work. It needs Telegram, so it is off whenever Telegram is. |
+| **gmail** | replies to your applications are read and turned into status *suggestions* you accept or dismiss ([gmail.md](gmail.md)) | nothing is read. Unlike the others it is **off by default**, and it is also off while the Google login is not in `.env`. The manual path (`mark`, the dashboard board) is unchanged. It is being built in steps: today the switch only turns on a stage that reads nothing. |
 
 Scoring itself is not a switch: it is the point of the pipeline. (It does need your Anthropic key; see [limits](#what-is-not-optional).)
 
@@ -300,7 +303,7 @@ scripts/n8n-import-workflows.sh --publish    # publishes the Telegram workflows 
 
 | Setting | Stored in | Change with |
 |---|---|---|
-| tailoring, telegram, digest switches | database (`feature_settings`) | `scripts/jobsearch features set ...` |
+| tailoring, telegram, digest, gmail switches | database (`feature_settings`) | `scripts/jobsearch features set ...` |
 | when each stage runs, how much (including company boards and feeds per collect run), the scoring model, the timezone | database (`schedule_settings`) | `scripts/jobsearch schedule set ...` |
 | tailoring behaviour (mode, approval, score band, daily limit, cover letter, pages, fact check, model) | database (`tailor_settings`) | `scripts/jobsearch tailor-settings set ...` or `/set` |
 | what to search for, filters, score threshold, company boards and their slugs, extra title words | `config/search.json` → database | edit, then `scripts/jobsearch search-profile apply` (or the dashboard's Search page; once it has saved, run `search-profile pull` before editing the file again) |

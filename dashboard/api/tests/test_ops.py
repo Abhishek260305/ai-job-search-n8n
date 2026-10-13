@@ -148,8 +148,10 @@ def test_the_alert_codes_match_the_sql():
     from pathlib import Path
     from typing import get_args
     from models import AlertCode
-    sql = (Path(__file__).resolve().parents[3] / "postgres" / "migrations" / "016_dashboard_ops.sql")
-    if not sql.is_file():
+    migrations = Path(__file__).resolve().parents[3] / "postgres" / "migrations"
+    # 016 wrote the function; 025 replaced it with two more alerts (the Gmail part): the newest definition holds them all
+    files = [migrations / "016_dashboard_ops.sql", migrations / "025_gmail_inbox.sql"]
+    if not all(f.is_file() for f in files):
         pytest.skip("postgres/ is not next to dashboard/")
-    in_sql = set(re.findall(r"SELECT \d+, '(?:bad|warn)', '([a-z_]+)'", sql.read_text(encoding="utf-8")))
+    in_sql = set(re.findall(r"SELECT \d+, '(?:bad|warn)', '([a-z_]+)'", files[-1].read_text(encoding="utf-8")))
     assert in_sql == set(get_args(AlertCode))

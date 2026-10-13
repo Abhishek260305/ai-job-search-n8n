@@ -94,7 +94,7 @@ describe('the confirmation', () => {
   })
 
   it('cannot start when the scraper says no, and shows why', async () => {
-    const seen = backend({ estimate: { can_run: false, reason: 'tailoring is switched off (jobsearch features set tailoring on)' } })
+    const seen = backend({ estimate: { can_run: false, reason: 'tailoring is switched off (jobsearch features set --tailoring on)' } })
     await userEvent.click(await open())
     const dialog = await screen.findByRole('dialog', { name: 'Tailor this job?' })
     expect(await within(dialog).findByText(/tailoring is switched off/)).toBeInTheDocument()

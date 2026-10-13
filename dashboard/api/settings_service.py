@@ -10,9 +10,9 @@ from store import Invalid
 # scraper/schedules.py (MIN_EVERY, MAX_EVERY, MAX_BATCH, MAX_BOARD_BATCH); tests/test_settings_service.py fails when
 # the two drift apart. They only shape hints on the page, the scraper enforces them.
 LIMITS = {
-    "min_every": {"collect": 15, "score": 5, "tailor": 5, "digest": 60},
+    "min_every": {"collect": 15, "score": 5, "tailor": 5, "digest": 60, "mail": 15},
     "max_every": 10080,
-    "max_batch": {"collect": 50, "score": 50, "tailor": 10, "digest": 50},
+    "max_batch": {"collect": 50, "score": 50, "tailor": 10, "digest": 50, "mail": 50},
     "max_board_batch": 200,
 }
 

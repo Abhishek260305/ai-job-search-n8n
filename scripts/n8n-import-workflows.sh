@@ -1,5 +1,5 @@
 #!/bin/sh
-# Import the six workflows into n8n, filling in your Telegram chat id from .env.
+# Import the seven workflows into n8n, filling in your Telegram chat id from .env.
 #
 #   scripts/n8n-import-workflows.sh [--publish]
 #
@@ -10,13 +10,14 @@
 #   --publish   also publish (schedule) the workflows and restart n8n, which is what makes the
 #               schedules take effect.
 #
-# 00 is the scheduler: it starts 01 collect, 02 score, 03 digest and 04 tailor on the schedule stored in the
+# 00 is the scheduler: it starts 01 collect, 02 score, 03 digest, 04 tailor and 06 mail on the schedule stored in the
 # database (scripts/jobsearch schedule), so changing a schedule never needs this script or an n8n restart.
 #
 # Telegram is optional. The two Telegram workflows (03 digest, 05 commands) are published only when both
 # TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set, and are unpublished otherwise (the scheduler never starts
 # the digest without Telegram). The scheduler, collect (01), score (02) and tailor (04) are always published;
-# tailoring does nothing while it is switched off (scripts/jobsearch features set tailoring off).
+# tailoring does nothing while it is switched off (scripts/jobsearch features set tailoring off). The mail workflow (06)
+# is published too and does nothing until the optional Gmail part is switched on and configured (docs/gmail.md).
 set -e
 cd "$(dirname "$0")/.."
 ENV_FILE="${ENV_FILE:-.env}"
@@ -44,7 +45,7 @@ fi
 $COMPOSE exec -T n8n sh -c 'n8n import:workflow --separate --input=/tmp/wf/ 2>&1 | grep -E "Successfully|rror" || true; rm -rf /tmp/wf'
 
 if [ "$PUBLISH" = 1 ]; then
-  for id in js-scheduler js-collect js-score js-tailor; do
+  for id in js-scheduler js-collect js-score js-tailor js-mail; do
     $COMPOSE exec -T n8n sh -c "n8n publish:workflow --id=$id 2>&1 | grep -E 'Publishing|rror' || true"
   done
   for id in js-telegram js-digest; do
@@ -56,8 +57,8 @@ if [ "$PUBLISH" = 1 ]; then
   done
   $COMPOSE restart n8n
   if [ "$TELEGRAM" = 1 ]; then
-    echo "published and restarted n8n: the scheduler, collect, score, tailor, digest and Telegram workflows are live."
+    echo "published and restarted n8n: the scheduler, collect, score, tailor, mail, digest and Telegram workflows are live."
   else
-    echo "published and restarted n8n: the scheduler, collect, score and tailor are live (the Telegram workflows are off)."
+    echo "published and restarted n8n: the scheduler, collect, score, tailor and mail are live (the Telegram workflows are off)."
   fi
 fi

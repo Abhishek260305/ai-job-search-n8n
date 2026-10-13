@@ -17,7 +17,7 @@ What we adapt, in our own implementation:
 | Drafter/reviewer tailoring with a factual grounding audit and requirement coverage | `scraper/tailor.py`, `scraper/tailor_service.py`, `docs/tailoring.md` |
 | Writing-style rules for cover letters (no dashes, no cliches, forward-looking, specific) | `scraper/tailor.py` prompt and audit |
 | PDF text-layer and page-count verification before a document is sent | `scraper/render.py` |
-| Status vocabulary and approve-before-write email sync | planned: Phase 6 |
+| The email sync flow: search by your companies and the ATS senders, read full bodies, a sourced batch, nothing written before approval, idempotent by message id | Phase 6: `docs/gmail.md`, `scraper/gmail_client.py` (more in steps 6c to 6f) |
 
 Where we copy code or substantial text verbatim, the file says so in its header and keeps this notice.
 
@@ -27,6 +27,44 @@ Where we copy code or substantial text verbatim, the file says so in its header 
 MIT License
 
 Copyright (c) 2026 Mads Lorentzen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## career-ops-hq/career-ops
+
+The Gmail status tracking (Phase 6) also adapts ideas from [career-ops-hq/career-ops](https://github.com/career-ops-hq/career-ops),
+an independent MIT-licensed AI job-search tool. We read its approach and write our own code for this stack; nothing is copied
+verbatim. It is not affiliated with or endorsing this project.
+
+| Idea | Where it lands here |
+|---|---|
+| Trust only the authentication verdict (SPF, DKIM, DMARC) that the receiving mail server itself recorded, never a header the sender wrote | `scraper/gmail_client.py` (`parse_auth_results`) |
+| Match a reply to an application by whole-word company names (a short name such as "HP" must not match "PHP") and ignore placeholder company names | `scraper/mail_match.py` |
+| Classify replies as interview, rejection, offer, acknowledgement or noise by wording, and keep a manual paste path for people without Gmail | `scraper/mail_rules.py`; the paste path is planned for step 6g |
+
+### License text (MIT)
+
+```
+MIT License
+
+Copyright (c) 2026 Santiago Fernández de Valderrama
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

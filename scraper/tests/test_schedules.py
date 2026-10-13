@@ -63,7 +63,14 @@ def test_valid_updates_are_cleaned():
     ("score", {"model": "bad model!"}, "model must be a model name"),
     ("score", {"model": "x"}, "model must be a model name"),
     ("score", {"enabled": "yes"}, "on or off"),
-    ("score", {"colour": "blue"}, "unknown schedule setting")])
+    ("score", {"colour": "blue"}, "unknown schedule setting"),
+    ("mail", {"every_minutes": 14}, "15 minutes"),                   # gentle on Gmail
+    ("mail", {"every_minutes": 10081}, "7 days"),
+    ("mail", {"at_time": "08:00"}, "not at a time of day"),
+    ("mail", {"batch": 51}, "1 to 50"),
+    ("mail", {"batch": 0}, "from 1 to 50"),
+    ("mail", {"model": "claude-haiku-5-5"}, "only the score schedule"),
+    ("mail", {"board_batch": 5}, "only the collect schedule")])
 def test_invalid_updates_say_why(name, fields, message):
     with pytest.raises(ValueError, match=message):
         S.validate_update(name, fields)
@@ -149,3 +156,22 @@ def test_the_database_layer_writes_board_batch_to_its_column(monkeypatch):
     store.update_schedule("collect", **S.validate_update("collect", {"board_batch": 45, "batch": 18}))
     sql, params = calls[0]
     assert "board_batch = %s" in sql and "batch = %s" in sql and params == [45, 18, "collect"]
+
+
+# ---- the mail stage (the optional Gmail part)
+
+def test_mail_is_a_stage_with_its_own_limits():
+    assert S.NAMES == ("collect", "score", "tailor", "digest", "mail")
+    assert S.validate_update("mail", {"every_minutes": "30m", "batch": 20, "enabled": True}) == {"every_minutes": 30, "batch": 20, "enabled": True}
+    assert S.validate_update("mail", {"every_minutes": 15}) == {"every_minutes": 15}
+    assert S.validate_update("mail", {"batch": 50}) == {"batch": 50}
+    assert "kept gentle on Gmail" in str(pytest.raises(ValueError, S.validate_update, "mail", {"every_minutes": 5}).value)
+
+
+def test_every_stage_has_a_minimum_and_a_maximum_batch():
+    assert set(S.MIN_EVERY) == set(S.MAX_BATCH) == set(S.NAMES)
+
+
+def test_describe_names_what_a_mail_run_does():
+    line = S.describe([row("mail", every_minutes=30, batch=20, last_run_at=NOW - timedelta(minutes=10), next_run_at=NOW + timedelta(minutes=20))], NOW)[0]
+    assert line.startswith("mail") and "every 30 minutes" in line and "20 emails opened per run" in line and "next: in 20 min" in line

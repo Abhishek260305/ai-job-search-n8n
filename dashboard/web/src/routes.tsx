@@ -3,6 +3,7 @@ import RequireAuth from '@/components/RequireAuth'
 import Login from '@/pages/Login'
 import NotFound from '@/pages/NotFound'
 import BoardRoute from '@/pages/BoardRoute'
+import EmailRoute from '@/pages/EmailRoute'
 import HealthRoute from '@/pages/HealthRoute'
 import OverviewRoute from '@/pages/OverviewRoute'
 import SearchRoute from '@/pages/SearchRoute'
@@ -17,6 +18,7 @@ export const routes: RouteObject[] = [
     children: [
       { path: '/', element: <OverviewRoute /> },
       { path: '/board', element: <BoardRoute /> },
+      { path: '/email', element: <EmailRoute /> },
       { path: '/health', element: <HealthRoute /> },
       { path: '/spend', element: <SpendRoute /> },
       { path: '/search', element: <SearchRoute /> },

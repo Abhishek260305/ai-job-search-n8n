@@ -4,7 +4,7 @@ We build in phases, each one tested and documented before the next starts. ✅ d
 
 ## Where things stand
 
-**Phases 0-5 (with 5b optional parts, 5c customizable schedules and 5d runaway protection) and Phase 7 (company job boards and remote feeds) are done:** the pipeline collects, filters, scores, tailors and sends applications for your review, under a hard spending cap, and every part after scoring is optional. **What remains is optional: Phase 6 (Gmail status tracking), Phase 8 (extras) and the later versions of Phase 9 (the web dashboard: versions 1 and 2a to 2c are built, tested and running, see [dashboard.md](dashboard.md)).**
+**Phases 0-5 (with 5b optional parts, 5c customizable schedules and 5d runaway protection) and Phase 7 (company job boards and remote feeds) are done:** the pipeline collects, filters, scores, tailors and sends applications for your review, under a hard spending cap, and every part after scoring is optional. **What remains is optional: Phase 6 (Gmail status tracking; its foundations, step 6a, are built, the mailbox reader is not), Phase 8 (extras) and the later versions of Phase 9 (the web dashboard: versions 1 and 2a to 2c are built, tested and running, see [dashboard.md](dashboard.md)).**
 
 | Phase | What | State |
 |---|---|---|
@@ -17,10 +17,10 @@ We build in phases, each one tested and documented before the next starts. ✅ d
 | 5b | Optional parts: switches, no-Telegram path, manual tracking, CSV export | ✅ |
 | 5c | Customizable schedules, scoring model, paper size, style notes | ✅ |
 | 5d | Runaway protection: counted attempts, Apify caps, global pause, stand-in APIs and a rehearsal | ✅ |
-| 6 | Gmail status tracking (optional) | ⬜ planned |
+| 6 | Gmail status tracking (optional): suggestions you accept, never automatic changes ([gmail.md](gmail.md)) | 🚧 6a to 6f deployed; 6g planned |
 | 7 | More sources: company job boards (five systems) and remote feeds (five feeds) | ✅ |
 | 8 | Extras (company research, interview prep) | ⬜ optional |
-| 9 | Web dashboard: summary, charts, jobs table, status editing, health, spend, settings and search profile; later Kanban ([dashboard.md](dashboard.md)) | 🟨 versions 1 and 2a to 2c ✅ (optional, deployed 2026-10-12); 3a (history, board, numbers) built, tested and deployed; 3b (notes, contacts, follow-ups) built and tested; 3c planned |
+| 9 | Web dashboard: summary, charts, jobs table, status editing, health, spend, settings and search profile; later Kanban ([dashboard.md](dashboard.md)) | 🟨 versions 1 and 2a to 2c ✅ (optional, deployed 2026-10-12); 3a (history, board, numbers), Undo, 3b (notes, contacts, follow-ups) and 3c (tailor one job on request) built, tested, deployed and on GitHub |
 
 ### Known limits (read these)
 
@@ -133,16 +133,21 @@ Nothing can loop on money (see [runaway-protection.md](runaway-protection.md)).
 - ✅ Apify: a run starts only if its hard charge limit fits the remaining budget; at most 2 runs per search; failed runs that started are counted; a hung run is aborted; a budget that cannot be read means nothing is started
 - ✅ A real Apify call showed the balance lags right after a run, so an unchanged balance counts as "unknown" (1.5 times the estimate), not free
 - ✅ Scoring hands a claim back when the model gave no reply; the collect summary reports searches skipped by the budget; doctor warns about parked jobs, paused schedules, Apify limits and a stalled scorer
-- ✅ Testing: stand-in Anthropic and Apify servers (`scraper/stubs.py`), a guard that makes any real network call in a unit test fail, and a rehearsal (`scraper/loop_rehearsal.py`) that runs the real code and SQL against a throwaway database with the stand-ins misbehaving: **39 of 39 checks within their bounds**
+- ✅ Testing: stand-in Anthropic and Apify servers (`scraper/stubs.py`), a guard that makes any real network call in a unit test fail, and a rehearsal (`scraper/loop_rehearsal.py`) that runs the real code and SQL against a throwaway database with the stand-ins misbehaving: **55 of 55 checks within their bounds**
 - ✅ 736 service tests, 111 CLI tests, SQL tests for the guards
 - See [testing.md](testing.md)
 
-## Phase 6: Gmail status tracking (optional) ⬜ planned
-- ⬜ Classify replies: acknowledgement, assessment, interview, offer, rejection
-- ⬜ Propose changes in a batch and write only after approval; never infer "hired" or "offer declined"
-- ⬜ Strictly optional: a user without Gmail keeps the manual path (`mark`) and loses nothing
-- ⬜ Shared status vocabulary: `drafted, applied, interview, offer, hired, rejected, no_response, offer_declined, withdrawn`
-- ⬜ Phishing flags on "offer" emails (sender/company mismatch, payment requests)
+## Phase 6: Gmail status tracking (optional) 🚧 6a to 6d deployed
+The reader proposes status changes from the replies in your Gmail; you accept or dismiss each one. Nothing changes without you. Full description, rules and privacy: [gmail.md](gmail.md).
+- ✅ **6a: foundations** (migration 021; built, tested and deployed 2026-10-12): the `gmail` switch (off by default), a `mail` stage in the scheduler and workflow `06 Check mail`, the tables `gmail_state`, `gmail_seen` and `email_suggestions`, `scripts/jobsearch gmail`, a doctor line, the dashboard API ready for the new switch and stage (the pages leave them out until 6f). The stage reads no mailbox yet
+- ✅ **6b** (deployed 2026-10-12; not yet tried against real Google): the Gmail client (two fixed Google hosts, read-only and checked, bounded, never logs a credential or an email) and its parser (an email is untrusted data; only Google's own authentication verdict is trusted), `scripts/jobsearch gmail login` (loopback + PKCE sign-in that saves the login without showing it) and `gmail check`, the stand-in Google in `scraper/stubs.py`, Google patterns in the secrets scanner, `scripts/init-env.sh --add-gmail`
+- ✅ **6c** (deployed 2026-10-12, migration 022; the scheduled stage does not run it until 6e): the search (your companies as sender-or-subject terms and the ATS senders, bounded, newest first, carrying on by date when a search fills up, `gmail rescan` for old mail), the matcher (evidence points, whole-word short names, no placeholder companies, ambiguity is never guessed, unfamiliar domain endings flagged), the rules classifier (acknowledgement, assessment, interview, offer, rejection, noise, unclear), the transition rules in code, and the flags (unverified sender, look-alike sender, free mail, scam wording, suspicious links, text aimed at an AI, phishing risk for offers)
+- ✅ **6d** (deployed 2026-10-13, migration 023; the scheduled stage does not run it until 6e): Claude (Haiku) classification for the unclear cases under the spending caps: one-line JSON the code validates (the quote must be in the email), the model never chooses the status and is never more than medium confidence, counted claims (three, then parked, refunded when nothing was spent), at most 10 calls a run and 40 a day, an email that carries instructions is never sent. See [gmail.md](gmail.md#the-model-step-6d).
+- ✅ **6e** (deployed 2026-10-13, migration 024): the scheduled `mail` stage reads mail (login check, search, model step, counts recorded), a rate limit is an early run and not a login failure, the doctor reports a login that expired / runs that keep ending early / parked emails, and the Telegram digest announces new suggestions once (company, job, what the reply looks like, never the subject or text) and an expired login once. See [gmail.md](gmail.md#the-scheduled-stage-6e).
+- ✅ **6f** (deployed 2026-10-13, migration 025): the dashboard's Email page: review, accept (the board's own change function: history and Undo), dismiss and bring back; stale suggestions only dismissable; a second look for flagged or low-confidence ones; the Gmail switch and the `mail` schedule on the Settings page, the `mail` stage and two Gmail alerts on Health, a pending count on the menu. See [dashboard.md](dashboard.md#version-6f-the-email-inbox).
+- ⬜ **6g:** docs, independent review, deploy, one real run on your mailbox
+- Rules it is built to: an email can only ever suggest *applied*, *interview*, *offer* or *rejected* (never anything after an offer: accepting or declining stays your decision); a signal that contradicts a final status is flagged, not proposed; offers get a phishing check (sender and company mismatch, failed authentication, payment requests); only matched emails are sent to Claude; read-only against Gmail; the manual path (`mark`) stays
+- The statuses are the ones the system already has (what `set_application_status()` accepts): `approved, skipped, applied, in_progress, interview, offer, rejected, withdrawn`; the database refuses any other proposal, and fixes which status each kind of email maps to
 
 ## Phase 7: Company job boards and remote feeds ✅
 Free, key-less sources next to Indeed, Naukri and LinkedIn. See [sources.md](sources.md).

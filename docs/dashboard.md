@@ -1,6 +1,6 @@
 # Dashboard (web UI)
 
-A browser view of everything the pipeline knows, so you do not have to open Postgres, the CLI or Telegram to see where your search stands. **Status: versions 1 and 2 (Jobs, Health with the pause switch, Spend, Settings and Search) are built, tested and in use. Version 3 (3a status history, the Kanban board and the numbers; 3b notes, contacts and follow-up reminders; 3c the "Tailor this job" button) is built and tested. 3a, 3b and Undo run on the author's server; 3c is not installed yet.** To open it, see [Open the dashboard](#open-the-dashboard); to add it to an install, see [Turn it on](#turn-it-on). Later versions are listed at the end so the work can be picked up in order.
+A browser view of everything the pipeline knows, so you do not have to open Postgres, the CLI or Telegram to see where your search stands. **Status: versions 1 and 2 (Jobs, Health with the pause switch, Spend, Settings and Search) are built, tested and in use. Version 3 (3a status history, the Kanban board and the numbers; 3b notes, contacts and follow-up reminders; 3c the "Tailor this job" button) is built and tested. 3a, 3b, Undo and 3c all run on the author's server.** To open it, see [Open the dashboard](#open-the-dashboard); to add it to an install, see [Turn it on](#turn-it-on). Later versions are listed at the end so the work can be picked up in order.
 
 The dashboard is optional, like every part beyond scoring. The CLI, Telegram and the database keep working exactly as they do today, with or without it.
 
@@ -443,6 +443,8 @@ A fourth page, `/settings`, for the settings you would otherwise change with `sc
 | Tailoring | Mode, lowest score, the score above which your base resume is used as written, most applications per day, resume pages, paper, cover letter | An emptied number goes back to "none" |
 | Spending caps | The four Claude and Apify caps | **Lower only** |
 
+**The optional Gmail part** has its switch (*Email replies*) and its `mail` schedule on the Settings page, and its suggestions on the [Email page](#version-6f-the-email-inbox) (Phase 6, step 6f; see [gmail.md](gmail.md)).
+
 **What stays a command, on purpose.** Each of these changes how money or approvals flow, so the page cannot send them and the API refuses them:
 
 - **Raising a cap** (`scripts/jobsearch budget set`). The page lowers a cap and refuses an increase twice: in the form, and in the API, which compares with the cap the scraper holds at that moment.
@@ -614,3 +616,27 @@ The health and spend panels and the pause switch are built (version 2a, above), 
 - **Gmail suggestions (with Phase 6):** status changes proposed from emails wait in an inbox for one-click approval; nothing is written without it.
 - **Match feedback:** a thumbs up or down per job, stored for later tuning of the filters and scoring.
 - **Comfort:** saved filters, more keyboard shortcuts.
+
+## Version 6f: the email inbox
+
+The **Email** page (`/email`) is where the suggestions the optional Gmail part makes are reviewed ([gmail.md](gmail.md)). Nothing changes until you accept one.
+
+- **To review / Accepted / Dismissed** tabs with counts. Each suggestion shows the company and job, the sender's **domain**, the email's subject and a short excerpt (plain text only: never markup, never a link), what the reply looks like and what accepting would do ("Looks like an interview invitation. Accepting marks this job Interview (it is Applied now)"), how sure the reader is, whether Claude or plain rules read it, and every flag in words (*Possible phishing: check who sent it*, *Google could not verify the sender*, ...).
+- **Accept** marks the job with the proposed status through the **same function as a click on the board** (`dashboard_move_status`), so it is in the job's history and **Undo** works (a toast for 30 seconds, and an *Undo* button on the Accepted tab while the job is still as the change left it).
+- **A second look.** A suggestion with a trust flag (a sender Google could not verify, a look-alike or free-mail sender, a display name that is the only match, scam wording, a contradicting status, odd markup...) or low confidence asks you to tick *I checked who sent this* before Accept is enabled, and the database refuses it without that tick. The tick belongs to what you read: if a later email replaces a waiting suggestion in place, the card is new and the tick is gone.
+- **Stale suggestions** (the job moved on since the email was read, so the change no longer fits: an interview invitation for a job you have since marked rejected) cannot be accepted, only dismissed. A refused accept reloads the list and says what the job is now.
+- **Dismiss** closes a suggestion; **Bring back** reopens a dismissed one unless another suggestion for the same job and status is already waiting. After an **Undo**, the accepted suggestion says the job is no longer what it proposed and offers **Review again**. Accepting never closes the job's *other* suggestions: whether one still fits is worked out each time, so an Undo leaves them as they were.
+- **The menu** shows how many suggestions wait next to *Email*, only while the Gmail part is on. A list shows the newest 100 and says how many more wait.
+- **Known limit.** A job that expired or was filtered out after the email was read can still take the change (you may really have applied before it closed): the card shows the job's current status next to the proposal, and Undo is there if it was a mistake.
+- **Settings** now has the Gmail switch (*Email replies*) among the optional parts and the `mail` schedule (*Check mail*, emails opened per run); **Health** lists the `mail` stage and raises two alerts while the part is on: *the Gmail login expired* and *the mail reader ended early N runs in a row*.
+
+### How it is built
+
+Migration 025 adds the only ways the dashboard may touch suggestions, all `SECURITY DEFINER` with a pinned `search_path`: `dashboard_email_inbox(state, limit)`, `dashboard_email_count()`, `dashboard_email_accept(id, expected, ack)`, `dashboard_email_dismiss(id)` and `dashboard_email_restore(id)`. The dashboard's database role still has **no** access to the Gmail tables (`email_suggestions`, `gmail_seen`, `gmail_state`) and cannot run the mail reader's own functions; the tests prove both. Routes: `GET /api/email?state=`, `GET /api/email/count`, `POST /api/email/{id}/accept {expected_status, acknowledged}`, `POST /api/email/{id}/dismiss`, `POST /api/email/{id}/restore` (writes need the session cookie and the `X-Requested-With` header, like every write). The page takes no status from the browser: what Accept does is whatever the email proposed, fixed in the database (a constraint allows only applied, interview, offer and rejected, and only a signal's own status).
+
+The rule for what a signal may change from a given status is written twice (the reader's `mail_rules.propose` and the database's `email_transition_ok`); the runaway rehearsal compares them for every signal and status and fails if they differ.
+
+### Adding version 6f to an existing install
+
+Rebuild the dashboard image, then `scripts/jobsearch migrate`: a dashboard newer than its database answers the Email page with *the database needs its latest migration* and nothing else breaks. Nothing here switches the Gmail part on.
+

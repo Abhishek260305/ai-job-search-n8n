@@ -1,7 +1,7 @@
 import { useIsFetching, useQueryClient } from '@tanstack/react-query'
 import { Download, LogOut, RefreshCw } from 'lucide-react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { keys, useBoard, useLogout, usePipeline, useSpend, useSummary } from '@/api/hooks'
+import { keys, useBoard, useEmailCount, useLogout, usePipeline, useSpend, useSummary } from '@/api/hooks'
 import ThemeToggle from '@/components/ThemeToggle'
 import { Button } from '@/components/ui/button'
 import { formatDateTime, formatRelative } from '@/lib/format'
@@ -21,16 +21,29 @@ function Updated({ at }: { at: string }) {
   )
 }
 
-export type Page = 'overview' | 'board' | 'health' | 'spend' | 'settings' | 'search'
+export type Page = 'overview' | 'board' | 'email' | 'health' | 'spend' | 'settings' | 'search'
 
 const PAGES: readonly { to: string; label: string; page: Page }[] = [
   { to: '/', label: 'Jobs', page: 'overview' },
   { to: '/board', label: 'Board', page: 'board' },
+  { to: '/email', label: 'Email', page: 'email' },
   { to: '/health', label: 'Health', page: 'health' },
   { to: '/spend', label: 'Spend', page: 'spend' },
   { to: '/search', label: 'Search', page: 'search' },
   { to: '/settings', label: 'Settings', page: 'settings' },
 ]
+
+/** How many email suggestions wait, next to the menu entry: only while the Gmail part is on and something waits. */
+function EmailBadge() {
+  const count = useEmailCount()
+  if (!count.data?.enabled || count.data.pending < 1) return null
+  return (
+    <span className="ml-1.5 inline-flex min-w-5 justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
+      <span aria-hidden="true">{count.data.pending}</span>
+      <span className="sr-only"> ({count.data.pending} waiting)</span>
+    </span>
+  )
+}
 
 // One small component per page, so a page only asks for the data it shows (hooks cannot be conditional).
 function OverviewUpdated() {
@@ -55,7 +68,7 @@ export default function AppHeader({ page = 'overview' }: { page?: Page }) {
   const { view } = useJobsParams()
   const logout = useLogout()
   const navigate = useNavigate()
-  const queryKeys = page === 'overview' ? [keys.summary, keys.allJobs] : page === 'board' ? [keys.board, keys.stats] : [page === 'health' ? keys.pipeline : page === 'spend' ? keys.spend : page === 'search' ? keys.search : keys.settings]
+  const queryKeys = page === 'overview' ? [keys.summary, keys.allJobs] : page === 'board' ? [keys.board, keys.stats] : page === 'email' ? [keys.emailAll, keys.emailCount] : [page === 'health' ? keys.pipeline : page === 'spend' ? keys.spend : page === 'search' ? keys.search : keys.settings]
   const fetching = useIsFetching({ predicate: (q) => queryKeys.some((k) => k[0] === q.queryKey[0]) }) > 0
 
   function refresh() {
@@ -78,6 +91,7 @@ export default function AppHeader({ page = 'overview' }: { page?: Page }) {
               )}
             >
               {p.label}
+              {p.page === 'email' && <EmailBadge />}
             </NavLink>
           ))}
         </nav>

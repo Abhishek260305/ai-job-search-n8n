@@ -226,7 +226,8 @@ def test_health_has_the_shape_the_screen_reads(store, ids):
         health = Health.model_validate(store.health())
     finally:
         _admin("DELETE FROM fetch_state")
-    assert [s.name for s in health.schedules] == ["collect", "score", "tailor", "digest"]
+    assert [s.name for s in health.schedules] == ["collect", "score", "tailor", "digest", "mail"]
+    assert health.schedules[-1].feature_off is True, "the mail stage is held back while the Gmail switch is off (the default)"
     assert health.paused.paused is False and health.timezone
     assert health.sources.failing == 1 and health.sources.items[0].key == "newco"
     assert health.queue.waiting_to_score == 0
@@ -407,3 +408,142 @@ def test_a_move_names_its_entry_and_a_no_op_names_none(store, ids):
     with pytest.raises(HistoryChanged):
         store.undo_status(job, "interview", newest)                              # the older entry, by its id
     assert store.undo_status(job, "interview", second["event_id"]) == {"id": job, "status": "applied"}
+
+
+# ---- version 6f: the email inbox, against the real functions (migration 025)
+
+from models import EmailAccepted, EmailCount, EmailInbox  # noqa: E402
+from store import EmailChanged, EmailNotFound  # noqa: E402
+
+
+@pytest.fixture
+def gmail_on(ids):
+    """The Gmail part on for one test, and everything it made removed afterwards (the health test expects it off, as it is by default)."""
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE feature_settings SET gmail = true")
+    yield
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("UPDATE feature_settings SET gmail = false")
+        conn.execute("DELETE FROM email_suggestions")
+
+
+def _suggest(ids, name, message_id, signal="interview", proposed="interview", at="applied", confidence="medium", flags=()):
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        return conn.execute(
+            "INSERT INTO email_suggestions (job_id, message_id, received_at, from_domain, subject, excerpt, signal, proposed_status, status_at_proposal,"
+            " confidence, source, flags) VALUES (%s, %s, now(), 'gamma.com', 'Interview invitation', 'We would like to schedule a call.', %s, %s, %s, %s, 'rules', %s)"
+            " RETURNING id", (ids[name], message_id, signal, proposed, at, confidence, list(flags))).fetchone()[0]
+
+
+def _reset_email(ids):
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("DELETE FROM email_suggestions")
+        conn.execute("SELECT set_application_status(%s, 'applied')", (ids["interview"],))
+
+
+def test_the_inbox_has_the_shape_the_screen_reads(store, ids, gmail_on):
+    _reset_email(ids)
+    sid = _suggest(ids, "interview", "pg-shape-1")
+    body = store.email_inbox("pending", 50)
+    parsed = EmailInbox.model_validate(body)
+    assert parsed.enabled is True and parsed.counts.pending >= 1
+    item = next(i for i in parsed.items if i.id == sid)
+    assert item.company == "Gamma" and item.current_status == "applied" and item.can_accept and not item.stale and not item.needs_ack and not item.can_undo
+    EmailCount.model_validate(store.email_count())
+    assert all(i["state"] == "accepted" for i in store.email_inbox("accepted", 10)["items"])
+    assert all(i["state"] == "pending" for i in body["items"]) and all(i["state"] == "dismissed" for i in store.email_inbox("dismissed", 10)["items"])
+
+
+def test_accept_moves_the_job_through_the_boards_function_and_undo_takes_it_back(store, ids, gmail_on):
+    _reset_email(ids)
+    sid = _suggest(ids, "interview", "pg-accept-1")
+    done = EmailAccepted.model_validate(store.email_accept(sid, "applied", False))
+    assert done.status == "interview" and done.event_id is not None and done.job_id == ids["interview"]
+    assert store.job(ids["interview"])["pipeline_status"] == "interview"
+    accepted = next(i for i in store.email_inbox("accepted", 20)["items"] if i["id"] == sid)
+    assert accepted["event_id"] == done.event_id and accepted["can_undo"] is True
+    assert store.undo_status(ids["interview"], "interview", done.event_id)["status"] == "applied"
+    with pytest.raises(EmailChanged):
+        store.email_accept(sid, "applied", False)
+
+
+def test_the_inbox_refusals_reach_the_api_layer_as_the_right_errors(store, ids, gmail_on):
+    _reset_email(ids)
+    flagged = _suggest(ids, "interview", "pg-flag-1", signal="offer", proposed="offer", confidence="low", flags=["phishing_risk"])
+    with pytest.raises(Invalid, match="second look"):
+        store.email_accept(flagged, "applied", False)
+    with pytest.raises(Conflict) as e:
+        store.email_accept(flagged, "shortlisted", True)
+    assert e.value.current == "applied"
+    with pytest.raises(EmailNotFound):
+        store.email_accept(10**12, "applied", False)
+    store.email_dismiss(flagged)
+    with pytest.raises(EmailChanged):
+        store.email_dismiss(flagged)
+    assert store.email_restore(flagged)["state"] == "pending"
+    scam = _suggest(ids, "scam", "pg-scam-1", signal="acknowledgement", proposed="applied", at="none")
+    with pytest.raises(Forbidden):
+        store.email_accept(scam, "scam_blocked", True)
+
+
+def test_a_stale_suggestion_cannot_be_accepted(store, ids, gmail_on):
+    _reset_email(ids)
+    sid = _suggest(ids, "interview", "pg-stale-1")
+    with psycopg.connect(ADMIN_DSN, autocommit=True) as conn:
+        conn.execute("SELECT set_application_status(%s, 'rejected')", (ids["interview"],))
+    item = next(i for i in store.email_inbox("pending", 50)["items"] if i["id"] == sid)
+    assert item["stale"] is True and item["can_accept"] is False
+    with pytest.raises(Conflict) as e:
+        store.email_accept(sid, "rejected", False)
+    assert e.value.current == "rejected"
+    _reset_email(ids)
+
+
+def test_the_role_cannot_touch_the_email_tables(ids):
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        for sql in ("SELECT 1 FROM email_suggestions", "SELECT 1 FROM gmail_seen", "SELECT 1 FROM gmail_state",
+                    "UPDATE email_suggestions SET state = 'accepted'", "SELECT gmail_digest(1)", "SELECT gmail_record_run('{}'::jsonb, false)"):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(sql)
+
+
+def test_undoing_an_accept_leaves_the_other_suggestions_and_lets_the_accepted_one_be_reviewed_again(store, ids, gmail_on):
+    _reset_email(ids)
+    rejection = _suggest(ids, "interview", "pg-undo-rej", signal="rejection", proposed="rejected")
+    invite = _suggest(ids, "interview", "pg-undo-int", signal="interview", proposed="interview")
+    done = store.email_accept(rejection, "applied", False)
+    pending = {i["id"]: i for i in store.email_inbox("pending", 50)["items"]}
+    assert pending[invite]["stale"] is True and pending[invite]["can_accept"] is False, "an interview invitation for a rejected job"
+    store.undo_status(ids["interview"], "rejected", done["event_id"])
+    pending = {i["id"]: i for i in store.email_inbox("pending", 50)["items"]}
+    assert pending[invite]["stale"] is False and pending[invite]["can_accept"] is True, "back to how it was"
+    accepted = {i["id"]: i for i in store.email_inbox("accepted", 50)["items"]}
+    assert accepted[rejection]["can_restore"] is True and accepted[rejection]["can_undo"] is False
+    assert store.email_restore(rejection)["state"] == "pending"
+    with pytest.raises(EmailChanged, match="brought back"):
+        store.email_restore(rejection)
+
+
+def test_two_accepts_for_one_job_at_the_same_moment_never_deadlock(store, ids, gmail_on):
+    import threading
+    outcomes = []
+    for round_ in range(25):
+        _reset_email(ids)
+        rejection = _suggest(ids, "interview", f"pg-race-rej-{round_}", signal="rejection", proposed="rejected")
+        invite = _suggest(ids, "interview", f"pg-race-int-{round_}", signal="interview", proposed="interview")
+        barrier = threading.Barrier(2)
+
+        def run(sid, errors=outcomes):
+            try:
+                barrier.wait(timeout=5)
+                PgStore(DSN).email_accept(sid, "applied", False)
+                errors.append("ok")
+            except Exception as e:                     # noqa: BLE001 - every kind is recorded, then judged below
+                errors.append(type(e).__name__)
+
+        threads = [threading.Thread(target=run, args=(sid,)) for sid in (rejection, invite)]
+        [t.start() for t in threads]
+        [t.join(timeout=20) for t in threads]
+    assert set(outcomes) <= {"ok", "Conflict", "EmailChanged"}, f"a crash or a deadlock among {sorted(set(outcomes))}"
+    assert outcomes.count("ok") >= 25, "at least one accept won in every round"
+    _reset_email(ids)

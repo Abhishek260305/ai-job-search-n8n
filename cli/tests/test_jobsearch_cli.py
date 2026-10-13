@@ -73,7 +73,14 @@ class FakeStack:
                 {"name": "tailor", "enabled": False, "every_minutes": 15, "at_time": None, "batch": 3, "model": None},
                 {"name": "digest", "enabled": True, "every_minutes": None, "at_time": "08:00:00", "batch": 10, "model": None}],
             "lines": ["collect  on  every 6 hours  18 searches per run", "digest   on  daily at 08:00  10 matches listed per run"]})
-        self.published = over.get("published", ["js-scheduler", "js-collect", "js-score", "js-tailor", "js-digest", "js-telegram"])
+        self.mail_body = over.get("mail", {
+            "lookback_days": 60, "from_now": False, "search_cursor": None, "token_status": "none", "token_checked_at": None, "last_run_at": None,
+            "last_error": None, "messages_seen": 0, "pending": 0, "accepted": 0, "dismissed": 0,
+            "enabled": False, "reason": "switched off (jobsearch features set --gmail on)", "configured": False,
+            "lines": ["gmail:      off, switched off (jobsearch features set --gmail on)", "login:      not set up: scripts/jobsearch gmail login (docs/gmail.md)",
+                      "search:     never run; the first search looks back 60 days",
+                      "emails:     0 looked at; suggestions: 0 waiting for you, 0 accepted, 0 dismissed"]})
+        self.published = over.get("published", ["js-scheduler", "js-collect", "js-score", "js-tailor", "js-mail", "js-digest", "js-telegram"])
         self.service_status = over.get("service_status", 200)
         self.service_reply = over.get("service_reply", {})
         self.spend = over.get("spend", [{"provider": "anthropic", "purpose": "score", "model": "claude-haiku-5-5", "calls": 40,
@@ -174,6 +181,8 @@ class FakeStack:
             return json.dumps({"status": self.service_status, "body": self.schedule_body})
         if "http://localhost:8000/features" in code:
             return json.dumps({"status": self.service_status, "body": self.features_body})
+        if "http://localhost:8000/mail/" in code:
+            return json.dumps({"status": self.service_status, "body": self.mail_body})
         if "http://localhost:8000/tailor" in code:
             return json.dumps({"status": self.service_status, "body": self.service_body(code)})
         if "/health" in code:
@@ -846,6 +855,7 @@ def test_features_show_and_set(capsys):
 def test_features_set_needs_a_choice_and_reports_server_errors(capsys):
     assert C.main(["features", "set"], stack=FakeStack()) == 2
     assert "at least one" in capsys.readouterr().err
+    assert C.main(["features", "set"], stack=FakeStack()) == 2 and "--gmail" in capsys.readouterr().err, "the message names every switch"
     st = FakeStack(service_status=503, features={"detail": {"errors": ["database down"]}})
     assert C.main(["features"], stack=st) == 2
     assert "database down" in capsys.readouterr().err
@@ -2590,3 +2600,174 @@ def test_follow_up_is_a_command(tmp_path, capsys):
 
 def test_the_module_docstring_lists_follow_up():
     assert "follow-up [--days N] [--digest on|off]" in C.__doc__
+
+
+# ------------------------------------------------------------------ the optional Gmail part (Phase 6, step 6a)
+
+def _gmail_on(**kw):
+    body = {"lookback_days": 60, "from_now": False, "search_cursor": None, "token_status": "ok", "token_checked_at": None, "last_run_at": None,
+            "last_error": None, "messages_seen": 14, "pending": 3, "accepted": 2, "dismissed": 1, "enabled": True, "reason": "", "configured": True,
+            "lines": ["gmail:      on"]}
+    return {**body, **kw}
+
+
+def _features_with_gmail(flag=True):
+    return {"flags": {"tailoring": True, "telegram": True, "digest": True, "gmail": flag},
+            "effective": {n: {"on": True, "reason": ""} for n in ("tailoring", "telegram", "digest", "gmail")},
+            "approval": "review", "approval_effective": "review", "lines": []}
+
+
+def test_features_set_gmail(capsys):
+    st = FakeStack()
+    assert C.main(["features", "set", "--gmail", "on"], stack=st) == 0
+    assert _post(st) == ("POST", "/features", {"gmail": True}), "only what was asked for is sent"
+    st = FakeStack()
+    assert C.main(["features", "set", "--gmail", "off", "--digest", "on"], stack=st) == 0
+    assert _post(st)[2] == {"gmail": False, "digest": True}
+
+
+def test_gmail_status_prints_the_report(capsys):
+    st = FakeStack()
+    assert C.main(["gmail"], stack=st) == 0
+    out = capsys.readouterr().out
+    assert "gmail:      off" in out and "the first search looks back 60 days" in out
+    assert extract_call(st.py_calls[-1])[:2] == ("GET", "/mail/status")
+    assert C.main(["gmail", "status"], stack=FakeStack()) == 0
+
+
+@pytest.mark.parametrize("value,sent", [("30", {"lookback_days": 30, "from_now": False}), ("1", {"lookback_days": 1, "from_now": False}),
+                                        ("365", {"lookback_days": 365, "from_now": False}), ("from-now", {"from_now": True}),
+                                        ("FROM-NOW", {"from_now": True})])
+def test_gmail_lookback_sets_how_the_first_search_starts(value, sent, capsys):
+    st = FakeStack()
+    assert C.main(["gmail", "lookback", value], stack=st) == 0
+    assert _post(st) == ("POST", "/mail/settings", sent), "choosing a number also leaves the from-now mode"
+    assert "gmail:" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv,message", [
+    (["gmail", "lookback"], "give a number of days"),
+    (["gmail", "lookback", "soon"], "number of days"),
+    (["gmail", "lookback", "0"], "from 1 to 365"),
+    (["gmail", "lookback", "366"], "from 1 to 365"),
+    (["gmail", "lookback", "12345"], "number of days"),
+    (["gmail", "lookback", "\u0663\u0660"], "number of days"),          # Arabic-Indic digits are not a number here
+    (["gmail", "lookback", "-5"], "number of days")])
+def test_a_bad_lookback_is_refused_before_calling_the_service(argv, message, capsys):
+    st = FakeStack()
+    assert C.main(argv, stack=st) == 2
+    assert message in capsys.readouterr().err and not any("'POST'" in c for c in getattr(st, "py_calls", []))
+
+
+def test_a_lookback_change_after_the_first_search_says_it_changes_nothing_now(capsys):
+    st = FakeStack(mail=_gmail_on(search_cursor="2026-10-12T10:00:00+00:00", lines=["gmail:      on"]))
+    assert C.main(["gmail", "lookback", "30"], stack=st) == 0
+    assert "the first search has already happened" in capsys.readouterr().out
+    st = FakeStack()
+    assert C.main(["gmail", "lookback", "30"], stack=st) == 0
+    assert "already happened" not in capsys.readouterr().out
+
+
+def test_gmail_run_is_refused_with_the_reason_while_the_part_is_not_in_effect(capsys):
+    st = FakeStack()
+    assert C.main(["gmail", "run"], stack=st) == 2
+    assert "Gmail is not in effect: switched off" in capsys.readouterr().err
+    assert not any("/schedule/mail/run" in c for c in st.py_calls), "nothing was requested"
+
+
+def test_gmail_run_asks_for_a_run_at_the_next_tick_when_it_is_in_effect(capsys):
+    st = FakeStack(mail=_gmail_on())
+    assert C.main(["gmail", "run"], stack=st) == 0
+    assert _post(st)[:2] == ("POST", "/schedule/mail/run") and "next scheduler tick" in capsys.readouterr().out
+
+
+def test_gmail_errors_from_the_service_are_readable(capsys):
+    st = FakeStack(service_status=400, mail={"detail": {"errors": ["the Gmail tables are not there yet: run scripts/jobsearch migrate"]}})
+    assert C.main(["gmail"], stack=st) == 2
+    assert "scripts/jobsearch migrate" in capsys.readouterr().err
+
+
+def test_doctor_says_nothing_about_gmail_until_it_is_switched_on():
+    checks = by_name(C.run_doctor(FakeStack(features=_features_with_gmail(False)), REPO))
+    assert "gmail" not in checks and "gmail" in checks["optional parts"].detail
+    old = _features_with_gmail()
+    del old["flags"]["gmail"], old["effective"]["gmail"]
+    assert "gmail" not in by_name(C.run_doctor(FakeStack(features=old), REPO)), "an older scraper without the part is not nagged"
+
+
+@pytest.mark.parametrize("mail,status,text", [
+    (_gmail_on(), "ok", "3 suggestions waiting for you, 14 emails looked at"),
+    (_gmail_on(pending=1), "ok", "1 suggestion waiting for you"),
+    (_gmail_on(enabled=False, reason="not configured: add GMAIL_CLIENT_ID to .env"), "warn", "switched on but not in effect: not configured"),
+    (_gmail_on(token_status="expired"), "warn", "expired or was revoked: sign in again"),
+    (_gmail_on(token_status="error", last_error="Gmail answered 503"), "warn", "the last mailbox check failed: Gmail answered 503"),
+    (_gmail_on(early_stops=3, last_summary={"search": {"stopped": "Gmail is limiting requests"}}), "warn", "the last 3 mailbox runs ended early (Gmail is limiting requests)"),
+    (_gmail_on(early_stops=4, last_summary={"stopped": "Gmail is unavailable"}), "warn", "the last 4 mailbox runs ended early (Gmail is unavailable)"),
+    (_gmail_on(early_stops=2), "ok", "3 suggestions waiting for you"),
+    (_gmail_on(unclear={"waiting": 0, "parked": 2}), "ok", "2 emails parked"),
+    (_gmail_on(unclear={"waiting": 4, "parked": 1}), "ok", "1 email parked"),
+    (_gmail_on(last_run_at="2026-10-13T09:30:00.123456+00:00"), "ok", "last run 2026-10-13 09:30 UTC")])
+def test_doctor_checks_gmail_when_it_is_on(mail, status, text):
+    checks = by_name(C.run_doctor(FakeStack(features=_features_with_gmail(), mail=mail), REPO))
+    assert checks["gmail"].status == status and text in checks["gmail"].detail
+
+
+def test_doctor_reports_a_gmail_status_error_as_a_warning_not_a_crash():
+    st = FakeStack(features=_features_with_gmail(), mail={"detail": {"errors": ["the Gmail tables are not there yet"]}})
+    st.service_status = 200      # features answer fine; only the mail call is made to fail below
+    orig = st.scraper_py
+
+    def scraper_py(code):
+        if "/mail/" in code:
+            return json.dumps({"status": 400, "body": st.mail_body})
+        return orig(code)
+    st.scraper_py = scraper_py
+    checks = by_name(C.run_doctor(st, REPO))
+    assert checks["gmail"].status == "warn" and "tables are not there yet" in checks["gmail"].detail
+
+
+def test_the_cli_and_the_service_agree_on_the_schedule_names():
+    assert "mail" in C.schedules.NAMES and C.FEATURE_NAMES[-1] == "gmail"
+
+
+def _check_body(**kw):
+    body = {"status": "ok", "account": "j***@gmail.com", "message": "the login works", "enabled": False, "reason": "switched off",
+            "lines": ["gmail:      off, switched off", "login:      works (checked just now)"]}
+    return {**body, **kw}
+
+
+def test_gmail_check_says_which_account_works(capsys):
+    st = FakeStack(mail=_check_body())
+    assert C.main(["gmail", "check"], stack=st) == 0
+    out = capsys.readouterr().out
+    assert "login: works. Signed in as j***@gmail.com." in out and "gmail:      off" in out
+    assert extract_call(st.py_calls[-1])[:2] == ("POST", "/mail/check")
+
+
+@pytest.mark.parametrize("body,text", [
+    (_check_body(status="expired", account="", message="Google no longer accepts the saved login: sign in again"), "login: EXPIRED or revoked: Google no longer accepts"),
+    (_check_body(status="error", account="", message="Gmail answered HTTP 503"), "login: the check failed: Gmail answered HTTP 503")])
+def test_gmail_check_reports_a_login_that_does_not_work(body, text, capsys):
+    assert C.main(["gmail", "check"], stack=FakeStack(mail=body)) == 0
+    assert text in capsys.readouterr().out
+
+
+def test_gmail_check_without_a_login_says_what_is_missing(capsys):
+    st = FakeStack(service_status=409, mail={"detail": {"errors": ["the Google login is not set up: GMAIL_CLIENT_ID missing from .env (docs/gmail.md)"]}})
+    assert C.main(["gmail", "check"], stack=st) == 2
+    assert "GMAIL_CLIENT_ID missing" in capsys.readouterr().err
+
+
+def test_gmail_rescan_says_what_it_does_and_what_it_leaves_alone(capsys):
+    body = {"lookback_days": 60, "reopened": 12, "lines": ["gmail:      on", "search:     never run; the first search looks back 60 days"], "enabled": True}
+    st = FakeStack(mail=body)
+    assert C.main(["gmail", "rescan"], stack=st) == 0
+    out = capsys.readouterr().out
+    assert "whole first-search window again (60 days)" in out and "12 email(s)" in out and "Suggestions already made are untouched" in out
+    assert extract_call(st.py_calls[-1])[:2] == ("POST", "/mail/rescan")
+
+
+def test_gmail_rescan_errors_are_readable(capsys):
+    st = FakeStack(service_status=400, mail={"detail": {"errors": ["this database has no Gmail search yet: run scripts/jobsearch migrate"]}})
+    assert C.main(["gmail", "rescan"], stack=st) == 2
+    assert "scripts/jobsearch migrate" in capsys.readouterr().err

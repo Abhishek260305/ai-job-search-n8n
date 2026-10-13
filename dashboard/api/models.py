@@ -428,7 +428,7 @@ class ScheduleRow(BaseModel):
     last_run_at: datetime | None
     next_run_at: datetime | None         # none while the schedule is off
     overdue: bool                        # only ever true for collect and score (see migration 016)
-    feature_off: bool                    # tailor with tailoring off, digest with the digest or Telegram off: the scheduler skips it
+    feature_off: bool                    # tailor with tailoring off, digest with the digest or Telegram off, mail with Gmail off: the scheduler skips it
 
 
 class Queue(BaseModel):
@@ -468,7 +468,7 @@ class Sources(BaseModel):
 
 
 AlertCode = Literal["paused", "claude_blocked", "claude_warn", "apify_blocked", "scoring_stalled", "parked",
-                    "sources_failing", "schedule_overdue"]
+                    "sources_failing", "schedule_overdue", "gmail_login", "gmail_stalled"]
 
 
 class Alert(BaseModel):
@@ -549,7 +549,7 @@ class Spend(BaseModel):
 # too), the style notes and the time zone (it moves the day and month a budget counts from, which would hand back a
 # daily cap already spent).
 
-ScheduleName = Literal["collect", "score", "tailor", "digest"]
+ScheduleName = Literal["collect", "score", "tailor", "digest", "mail"]
 TailorMode = Literal["auto", "manual"]
 Paper = Literal["a4", "letter"]
 
@@ -576,11 +576,12 @@ class FeatureFlags(BaseModel):
     tailoring: bool
     telegram: bool
     digest: bool
+    gmail: bool = False                  # off until asked for (it also needs a Google login in .env); an older scraper does not report it
 
 
 class FeatureSettings(BaseModel):
     flags: FeatureFlags                  # the switches
-    effective: dict[Literal["tailoring", "telegram", "digest"], FeatureStatus]   # switch AND configured (.env)
+    effective: dict[Literal["tailoring", "telegram", "digest", "gmail"], FeatureStatus]   # switch AND configured (.env)
     approval: str                        # the approval mode as set
     approval_effective: str              # what it behaves as now: "review" becomes "auto" without Telegram
 
@@ -640,6 +641,7 @@ class FeaturesChange(BaseModel):
     tailoring: StrictBool | None = None
     telegram: StrictBool | None = None
     digest: StrictBool | None = None
+    gmail: StrictBool | None = None
 
 
 class TailoringChange(BaseModel):
@@ -759,3 +761,88 @@ class FindResult(BaseModel):
 class RunRequested(BaseModel):
     requested: ScheduleName
     note: str
+
+
+# ---------------------------------------------------------------- version 6f: the email inbox
+# One dict from dashboard_email_inbox() / dashboard_email_count() / dashboard_email_accept() (migration 025); the shapes are checked
+# against the real functions in tests/test_store_pg.py. The subject and the excerpt are text from an email: untrusted, shown as plain
+# text only.
+
+EmailState = Literal["pending", "accepted", "dismissed"]
+EmailSignal = Literal["acknowledgement", "assessment", "interview", "offer", "rejection"]
+# only what an email may propose (the database refuses anything else)
+EmailProposed = Literal["applied", "interview", "offer", "rejected"]
+
+
+class EmailQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    state: EmailState = "pending"
+    limit: int = Field(default=50, ge=1, le=100)
+
+
+class EmailItem(BaseModel):
+    id: int
+    job_id: int
+    company: str | None
+    title: str
+    job_status: PipelineStatus
+    current_status: PipelineStatus       # what the job is now (the application's status, or the job's): what Accept must be told it expects
+    received_at: datetime
+    from_domain: str
+    subject: str
+    excerpt: str
+    signal: EmailSignal
+    proposed_status: EmailProposed
+    status_at_proposal: str              # the application's status when this was written ('none' when it had none)
+    confidence: Literal["high", "medium", "low"]
+    source: Literal["rules", "model"]
+    flags: list[str]
+    state: EmailState
+    created_at: datetime
+    decided_at: datetime | None
+    event_id: int | None                 # the history entry an accept wrote (what Undo is tied to)
+    stale: bool                          # the job moved on: the change no longer makes sense, so it can only be dismissed
+    needs_ack: bool                      # a trust flag or low confidence: Accept asks for a second look
+    can_accept: bool
+    can_undo: bool
+    can_restore: bool                    # a dismissed one, or an accepted one whose change was undone or overtaken: it can be reviewed again
+
+
+class EmailCounts(BaseModel):
+    pending: int
+    accepted: int
+    dismissed: int
+
+
+class EmailInbox(BaseModel):
+    enabled: bool                        # the Gmail part is switched on
+    login: Literal["none", "ok", "expired", "error"]
+    counts: EmailCounts
+    items: list[EmailItem]
+
+
+class EmailCount(BaseModel):
+    enabled: bool
+    pending: int
+
+
+class EmailAccept(BaseModel):
+    """Accept one suggestion. `expected_status` is the job's status the page showed (`current_status`); a mismatch is a 409.
+    `acknowledged` says the person looked at the sender: required when the suggestion carries a trust flag or low confidence."""
+    model_config = ConfigDict(extra="forbid")
+
+    expected_status: PipelineStatus
+    acknowledged: StrictBool = False
+
+
+class EmailAccepted(BaseModel):
+    id: int
+    job_id: int
+    status: EditableStatus
+    event_id: int | None = None
+
+
+class EmailDecided(BaseModel):
+    id: int
+    state: Literal["pending", "dismissed"]

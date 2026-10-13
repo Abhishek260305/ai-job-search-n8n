@@ -39,8 +39,9 @@ def init_env(repo, *args):
 
 
 def old_env_example() -> str:
-    """.env.example as it was before the dashboard block, filled in like an existing install."""
+    """.env.example as it was before the Gmail and dashboard blocks, filled in like an existing install."""
     text = (REPO / ".env.example").read_text().split("\n# OPTIONAL: the web dashboard")[0]
+    text = re.sub(r"\n# OPTIONAL: the Gmail part.*?GMAIL_REFRESH_TOKEN=\n", "", text, flags=re.S)
     return text.replace("POSTGRES_PASSWORD=\n", "POSTGRES_PASSWORD=" + "a" * 48 + "\n")
 
 
@@ -279,6 +280,10 @@ def test_files_that_must_never_be_published_are_caught(gitrepo, name, what):
     ("a Tailscale key", "tskey-auth-" + "k1B2c3D4e5" * 3),
     ("a password in a web address", "postgres://admin:" + "hunter22@db.internal/app"),
     ("a home folder path", "/Users/" + "jdoe/Desktop/notes"),
+    ("a Google OAuth client secret", "GOCSPX-" + "aB3dE6gH9jK2mN5pQ8sT1vW4xY7z"),
+    ("a Google OAuth refresh token", "1//" + "0gAbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AbCdEf"),
+    ("a Google OAuth access token", "ya29." + "a0AfH6SMBxAbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCdEfGhIjKlMnOpQrStUv"),
+    ("a Google OAuth client id", "123456789012-" + "abcdefghijklmnopqrstuvwxyz012345" + ".apps.googleusercontent.com"),
 ])
 def test_text_shaped_like_a_secret_is_caught_without_being_printed(gitrepo, label, secret):
     (gitrepo / "notes.md").write_text(f"hello\nthe value is {secret}\n")
@@ -289,7 +294,9 @@ def test_text_shaped_like_a_secret_is_caught_without_being_printed(gitrepo, labe
 
 @needs_git
 def test_short_test_dummies_are_not_mistaken_for_keys(gitrepo):
-    (gitrepo / "test_x.py").write_text('KEY = "sk-ant-SECRET-test-key"\nTOKEN = "123456:ABC"\n')
+    (gitrepo / "test_x.py").write_text('KEY = "sk-ant-SECRET-test-key"\nTOKEN = "123456:ABC"\n'
+                                       'G1 = "GOCSPX-stub-secret-0123456789"\nG2 = "1//stub-refresh-token-0123456789"\n'
+                                       'G3 = "ya29.stub-access-0001-abcdefghijklmnop"\nG4 = "123456789012-stubclientid0123456789.apps.googleusercontent.com"\n')
     assert check(gitrepo).returncode == 0
 
 
@@ -475,3 +482,85 @@ def test_set_env_refuses_bad_input_and_leaves_env_alone(setenv_repo, key, value)
 def test_set_env_needs_an_env_file(setenv_repo):
     (setenv_repo / ".env").unlink()
     assert set_env(setenv_repo, "ANTHROPIC_API_KEY", "abc\n").returncode == 1
+
+
+# ---- the optional Gmail part's login values must actually reach the scraper (a missing line here once made "configured" impossible)
+
+def _service_block(compose: str, name: str) -> str:
+    m = re.search(rf"^  {name}:\n(.*?)(?=^  \S|\Z)", compose, re.M | re.S)
+    assert m, f"no service {name} in docker-compose.yml"
+    return m.group(1)
+
+
+def test_the_gmail_login_values_are_passed_to_the_scraper_and_listed_in_the_env_example():
+    import sys
+    sys.path.insert(0, str(REPO / "scraper"))
+    import features
+    block = _service_block((REPO / "docker-compose.yml").read_text(), "scraper")
+    example = env_values(REPO / ".env.example")
+    for name in features.GMAIL_VARS:
+        assert re.search(rf"^\s+{name}: \$\{{{name}:-\}}\s*$", block, re.M), f"{name} is not passed to the scraper container"
+        assert example.get(name) == "", f"{name} must be a blank line in .env.example (scripts/set-env.sh needs the line to exist)"
+        assert name not in (REPO / "workflows" / "06-check-mail.json").read_text(), "the workflow never carries the login"
+
+
+def test_no_other_service_gets_the_gmail_login():
+    compose = (REPO / "docker-compose.yml").read_text()
+    for service in ("n8n", "postgres", "gotenberg", "dashboard"):
+        if re.search(rf"^  {service}:\n", compose, re.M):
+            assert "GMAIL_" not in _service_block(compose, service), f"{service} must not see the Google login"
+
+
+# ---- init-env.sh --add-gmail: the three blank lines the sign-in fills (they must exist: set-env.sh refuses an unknown name)
+
+GMAIL_KEYS = ("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN")
+
+
+def test_add_gmail_appends_three_blank_lines_to_an_old_env_and_changes_nothing_else(repo):
+    old = old_env_example().rstrip("\n")                       # an install from before the Gmail part; the last line has no newline
+    assert not any(k in old for k in GMAIL_KEYS)
+    (repo / ".env").write_text(old)
+    os.chmod(repo / ".env", 0o640)
+    r = init_env(repo, "--add-gmail")
+    assert r.returncode == 0, r.stderr
+    text = (repo / ".env").read_text()
+    assert text.startswith(old + "\n"), "nothing existing changed, nothing glued onto the last line"
+    v = env_values(repo / ".env")
+    assert all(v[k] == "" for k in GMAIL_KEYS) and all(text.count(f"\n{k}=\n") == 1 for k in GMAIL_KEYS)
+    assert stat.S_IMODE((repo / ".env").stat().st_mode) == 0o640
+    assert all(k in r.stdout for k in GMAIL_KEYS)
+
+
+def test_add_gmail_is_idempotent_and_never_touches_a_line_that_already_has_a_value(repo):
+    (repo / ".env").write_text(old_env_example() + "GMAIL_CLIENT_ID=already-set.example\n")
+    first = init_env(repo, "--add-gmail")
+    text = (repo / ".env").read_text()
+    v = env_values(repo / ".env")
+    assert v["GMAIL_CLIENT_ID"] == "already-set.example" and v["GMAIL_CLIENT_SECRET"] == "" and v["GMAIL_REFRESH_TOKEN"] == ""
+    assert "GMAIL_CLIENT_ID" not in first.stdout.split("Next:")[0], "an existing line is not reported as added"
+    again = init_env(repo, "--add-gmail")
+    assert again.returncode == 0 and "nothing changed" in again.stdout and (repo / ".env").read_text() == text
+
+
+def test_add_gmail_needs_an_env_and_does_not_need_openssl(repo, tmp_path):
+    r = init_env(repo, "--add-gmail")
+    assert r.returncode == 1 and "run scripts/init-env.sh first" in r.stderr and not (repo / ".env").exists()
+    (repo / ".env").write_text("TZ=UTC\n")
+    r = init_env(repo, "--add-gmail")
+    assert r.returncode == 0, r.stderr
+    assert "openssl" not in open(repo / "scripts" / "init-env.sh").read().split("add_gmail()")[1].split("[ \"${1:-}\" = \"--add-gmail\" ]")[0], "the function itself never calls openssl"
+    script = (repo / "scripts" / "init-env.sh").read_text()
+    assert script.index('"--add-gmail" ]') < script.index("command -v openssl"), "the Gmail lines are added before the openssl check, so a machine without it still works"
+
+
+def test_a_new_env_from_the_example_already_has_the_gmail_lines_blank(repo):
+    example = env_values(repo / ".env.example")
+    assert all(k in example and example[k] == "" for k in GMAIL_KEYS)
+
+
+@needs_git
+def test_env_example_must_not_hold_a_gmail_value(gitrepo):
+    for name in GMAIL_KEYS:
+        (gitrepo / ".env.example").write_text(f"{name}=something\n")
+        r = check(gitrepo)
+        assert r.returncode == 1 and ".env.example:1 gives a secret a value" in r.stdout, name

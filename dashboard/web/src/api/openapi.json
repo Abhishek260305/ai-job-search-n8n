@@ -1686,6 +1686,414 @@
         }
       }
     },
+    "/api/email": {
+      "get": {
+        "summary": "Email Inbox",
+        "operationId": "email_inbox_api_email_get",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "pending",
+                "accepted",
+                "dismissed"
+              ],
+              "type": "string",
+              "default": "pending",
+              "title": "State"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailInbox"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/email/count": {
+      "get": {
+        "summary": "Email Count",
+        "operationId": "email_count_api_email_count_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCount"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/email/{suggestion_id}/accept": {
+      "post": {
+        "summary": "Email Accept",
+        "operationId": "email_accept_api_email__suggestion_id__accept_post",
+        "parameters": [
+          {
+            "name": "suggestion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Suggestion Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailAccept"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAccepted"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/email/{suggestion_id}/dismiss": {
+      "post": {
+        "summary": "Email Dismiss",
+        "operationId": "email_dismiss_api_email__suggestion_id__dismiss_post",
+        "parameters": [
+          {
+            "name": "suggestion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Suggestion Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailDecided"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/email/{suggestion_id}/restore": {
+      "post": {
+        "summary": "Email Restore",
+        "operationId": "email_restore_api_email__suggestion_id__restore_post",
+        "parameters": [
+          {
+            "name": "suggestion_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "maximum": 9223372036854775807,
+              "minimum": 1,
+              "title": "Suggestion Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailDecided"
+                }
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/stats": {
       "get": {
         "summary": "Stats",
@@ -2075,7 +2483,8 @@
                 "collect",
                 "score",
                 "tailor",
-                "digest"
+                "digest",
+                "mail"
               ],
               "type": "string",
               "title": "Name"
@@ -2170,7 +2579,8 @@
                 "collect",
                 "score",
                 "tailor",
-                "digest"
+                "digest",
+                "mail"
               ],
               "type": "string",
               "title": "Name"
@@ -2710,7 +3120,9 @@
               "scoring_stalled",
               "parked",
               "sources_failing",
-              "schedule_overdue"
+              "schedule_overdue",
+              "gmail_login",
+              "gmail_stalled"
             ],
             "title": "Code"
           },
@@ -3419,6 +3831,410 @@
         ],
         "title": "DailySpend"
       },
+      "EmailAccept": {
+        "properties": {
+          "expected_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Expected Status"
+          },
+          "acknowledged": {
+            "type": "boolean",
+            "title": "Acknowledged",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_status"
+        ],
+        "title": "EmailAccept",
+        "description": "Accept one suggestion. `expected_status` is the job's status the page showed (`current_status`); a mismatch is a 409.\n`acknowledged` says the person looked at the sender: required when the suggestion carries a trust flag or low confidence."
+      },
+      "EmailAccepted": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "skipped",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn"
+            ],
+            "title": "Status"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "job_id",
+          "status"
+        ],
+        "title": "EmailAccepted"
+      },
+      "EmailCount": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "pending": {
+            "type": "integer",
+            "title": "Pending"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "pending"
+        ],
+        "title": "EmailCount"
+      },
+      "EmailCounts": {
+        "properties": {
+          "pending": {
+            "type": "integer",
+            "title": "Pending"
+          },
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted"
+          },
+          "dismissed": {
+            "type": "integer",
+            "title": "Dismissed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pending",
+          "accepted",
+          "dismissed"
+        ],
+        "title": "EmailCounts"
+      },
+      "EmailDecided": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "dismissed"
+            ],
+            "title": "State"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "state"
+        ],
+        "title": "EmailDecided"
+      },
+      "EmailInbox": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "login": {
+            "type": "string",
+            "enum": [
+              "none",
+              "ok",
+              "expired",
+              "error"
+            ],
+            "title": "Login"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/EmailCounts"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EmailItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "login",
+          "counts",
+          "items"
+        ],
+        "title": "EmailInbox"
+      },
+      "EmailItem": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "job_id": {
+            "type": "integer",
+            "title": "Job Id"
+          },
+          "company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "job_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Job Status"
+          },
+          "current_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "filtered_out",
+              "scam_blocked",
+              "scored",
+              "shortlisted",
+              "tailored",
+              "drafted",
+              "approved",
+              "applied",
+              "in_progress",
+              "interview",
+              "offer",
+              "rejected",
+              "withdrawn",
+              "skipped",
+              "expired"
+            ],
+            "title": "Current Status"
+          },
+          "received_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Received At"
+          },
+          "from_domain": {
+            "type": "string",
+            "title": "From Domain"
+          },
+          "subject": {
+            "type": "string",
+            "title": "Subject"
+          },
+          "excerpt": {
+            "type": "string",
+            "title": "Excerpt"
+          },
+          "signal": {
+            "type": "string",
+            "enum": [
+              "acknowledgement",
+              "assessment",
+              "interview",
+              "offer",
+              "rejection"
+            ],
+            "title": "Signal"
+          },
+          "proposed_status": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "interview",
+              "offer",
+              "rejected"
+            ],
+            "title": "Proposed Status"
+          },
+          "status_at_proposal": {
+            "type": "string",
+            "title": "Status At Proposal"
+          },
+          "confidence": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Confidence"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "rules",
+              "model"
+            ],
+            "title": "Source"
+          },
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Flags"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "accepted",
+              "dismissed"
+            ],
+            "title": "State"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "needs_ack": {
+            "type": "boolean",
+            "title": "Needs Ack"
+          },
+          "can_accept": {
+            "type": "boolean",
+            "title": "Can Accept"
+          },
+          "can_undo": {
+            "type": "boolean",
+            "title": "Can Undo"
+          },
+          "can_restore": {
+            "type": "boolean",
+            "title": "Can Restore"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "job_id",
+          "company",
+          "title",
+          "job_status",
+          "current_status",
+          "received_at",
+          "from_domain",
+          "subject",
+          "excerpt",
+          "signal",
+          "proposed_status",
+          "status_at_proposal",
+          "confidence",
+          "source",
+          "flags",
+          "state",
+          "created_at",
+          "decided_at",
+          "event_id",
+          "stale",
+          "needs_ack",
+          "can_accept",
+          "can_undo",
+          "can_restore"
+        ],
+        "title": "EmailItem"
+      },
       "ErrorBody": {
         "properties": {
           "detail": {
@@ -3474,6 +4290,11 @@
           "digest": {
             "type": "boolean",
             "title": "Digest"
+          },
+          "gmail": {
+            "type": "boolean",
+            "title": "Gmail",
+            "default": false
           }
         },
         "type": "object",
@@ -3497,7 +4318,8 @@
               "enum": [
                 "tailoring",
                 "telegram",
-                "digest"
+                "digest",
+                "gmail"
               ]
             },
             "type": "object",
@@ -3573,6 +4395,17 @@
               }
             ],
             "title": "Digest"
+          },
+          "gmail": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gmail"
           }
         },
         "additionalProperties": false,
@@ -5157,7 +5990,8 @@
               "collect",
               "score",
               "tailor",
-              "digest"
+              "digest",
+              "mail"
             ],
             "title": "Requested"
           },
@@ -5346,7 +6180,8 @@
               "collect",
               "score",
               "tailor",
-              "digest"
+              "digest",
+              "mail"
             ],
             "title": "Name"
           },

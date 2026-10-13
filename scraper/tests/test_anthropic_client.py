@@ -135,3 +135,24 @@ def test_unrelated_400_errors_are_not_mistaken_for_a_thinking_problem():
     with pytest.raises(A.AnthropicError, match="max_tokens"):
         client_for(handler).messages(model="m", system="s", user="u", max_tokens=1)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("body", [b"<html>proxy error</html>", b"", b"[1, 2]", b'{"content": "not a list"}', b'{"content": [1, 2]}'])
+def test_a_200_whose_body_is_not_the_reply_is_a_named_retryable_error_not_a_crash(body):
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(200, content=body)
+    with pytest.raises(A.AnthropicError) as e:
+        client_for(handler, retries=2).messages(model="m", system="s", user="u", max_tokens=1)
+    assert e.value.retryable and "could not be read" in str(e.value) and len(calls) == 3 and KEY not in str(e.value)
+
+
+def test_a_garbled_200_that_is_followed_by_a_good_reply_succeeds():
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(200, content=b"<html>") if len(calls) == 1 else ok("done")
+    assert client_for(handler).messages(model="m", system="s", user="u", max_tokens=1).text == "done"

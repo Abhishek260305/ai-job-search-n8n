@@ -33,6 +33,40 @@ describe('the settings page', () => {
     expect(screen.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page')
   })
 
+  it('lists the five stages and the four optional parts, the Gmail part among them', async () => {
+    renderApp('/settings')
+    await schedule('Collect jobs')
+    const forms = screen.getAllByRole('form').map((f) => f.getAttribute('aria-label'))
+    expect(forms.filter((n) => n?.endsWith(' schedule'))).toEqual(
+      ['Collect jobs schedule', 'Score jobs schedule', 'Tailor applications schedule', 'Send the digest schedule', 'Check mail schedule'])
+    const parts = within(screen.getByRole('list', { name: 'Optional parts' })).getAllByRole('listitem')
+    expect(parts.map((p) => p.querySelector('label')?.textContent)).toEqual(['Tailoring', 'Telegram', 'Digest', 'Email replies'])
+    const mail = within(parts[3])
+    expect(mail.getByRole('checkbox')).not.toBeChecked()
+    expect(mail.getByText(/Not in effect: switched off \(jobsearch features set --gmail on\)/)).toBeInTheDocument()
+    expect(mail.getByText(/read-only/)).toBeInTheDocument()
+  })
+
+  it('names what the mail stage does per run', async () => {
+    renderApp('/settings')
+    const mail = await schedule('Check mail')
+    expect(mail.getByLabelText('Emails opened per run')).toHaveValue('20')
+    expect(mail.getByLabelText('Runs every')).toHaveValue('30')
+  })
+
+  it('switches the Gmail part on and off like the other parts, saving at once', async () => {
+    const seen: unknown[] = []
+    server.use(http.patch('/api/settings/features', async ({ request }) => {
+      seen.push(await request.json())
+      return HttpResponse.json(SETTINGS)
+    }))
+    const user = userEvent.setup()
+    renderApp('/settings')
+    const box = await screen.findByRole('checkbox', { name: 'Email replies' })
+    await user.click(box)
+    await waitFor(() => expect(seen).toEqual([{ gmail: true }]))
+  })
+
   it('shows the saved values in plain units', async () => {
     renderApp('/settings')
     const collect = await schedule('Collect jobs')
@@ -203,7 +237,7 @@ describe('optional parts', () => {
     renderApp('/settings')
     const list = await screen.findByRole('list', { name: 'Optional parts' })
     const items = within(list).getAllByRole('listitem')
-    expect(items[0]).toHaveTextContent('Not in effect: switched off (jobsearch features set tailoring on)')
+    expect(items[0]).toHaveTextContent('Not in effect: switched off (jobsearch features set --tailoring on)')
     expect(items[1]).toHaveTextContent('In effect')
     expect(items[0]).toHaveTextContent('about 5 cents per application')
   })

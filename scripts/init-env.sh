@@ -6,12 +6,46 @@
 #                                         until COMPOSE_PROFILES=dashboard.
 #   scripts/init-env.sh --add-dashboard   add the web dashboard to an existing .env and turn it on. Only keys that
 #                                         are missing or empty are filled in; every other line stays as it is.
+#   scripts/init-env.sh --add-gmail       add the three blank lines for the optional Gmail login (docs/gmail.md) to an
+#                                         existing .env. Existing lines, empty or not, are never touched.
 #
 # Prints key names, never values.
 set -e
 cd "$(dirname "$0")/.."
 umask 077
 trap 'rm -f .env.tmp .env.new' EXIT
+
+GMAIL_KEYS="GMAIL_CLIENT_ID GMAIL_CLIENT_SECRET GMAIL_REFRESH_TOKEN"
+
+# Blank lines only: the values are typed later with scripts/set-env.sh, which needs the line to exist. Runs before the openssl
+# check because it generates nothing.
+add_gmail() {
+  if [ ! -f .env ]; then
+    echo "No .env yet: run scripts/init-env.sh first." >&2
+    exit 1
+  fi
+  changed=""
+  header=""
+  for key in $GMAIL_KEYS; do
+    grep -q "^$key=" .env && continue
+    # the header's leading newline also ends a last line that has none, so no key gets glued onto it
+    if [ -z "$header" ]; then
+      printf '\n# Gmail login (optional), added by scripts/init-env.sh --add-gmail (see .env.example)\n' >> .env
+      header=1
+    fi
+    printf '%s=\n' "$key" >> .env
+    changed="$changed $key"
+  done
+  if [ -z "$changed" ]; then
+    echo ".env already has the Gmail lines; nothing changed."
+  else
+    echo "Added to .env (blank):$changed"
+  fi
+  echo "Next: scripts/jobsearch gmail login signs in and fills them (nothing is typed into a chat), or type each with scripts/set-env.sh NAME."
+}
+
+[ "${1:-}" = "--add-gmail" ] && { add_gmail; exit 0; }
+
 command -v openssl > /dev/null || { echo "openssl is needed to generate the secrets." >&2; exit 1; }
 
 # put KEY VALUE FILE: replace the first KEY= line, or append one. The value goes through the environment, not
@@ -69,7 +103,7 @@ add_dashboard() {
 case "${1:-}" in
   "") ;;
   --add-dashboard) add_dashboard; exit 0 ;;
-  *) echo "usage: $0 [--add-dashboard]" >&2; exit 2 ;;
+  *) echo "usage: $0 [--add-dashboard | --add-gmail]" >&2; exit 2 ;;
 esac
 
 if [ -f .env ]; then

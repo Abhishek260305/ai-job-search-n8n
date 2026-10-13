@@ -219,22 +219,204 @@ class PgStore:
 
     # ---- optional parts (feature switches) and manual status editing ---------------------
     def features(self) -> dict:
-        with self.cursor() as cur:
-            cur.execute("SELECT tailoring, telegram, digest FROM feature_settings WHERE id = 1")
-            return cur.fetchone()
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT tailoring, telegram, digest, gmail FROM feature_settings WHERE id = 1")
+                return cur.fetchone()
+        except psycopg.errors.UndefinedColumn:
+            # migration 021 is not applied yet: the Gmail part cannot be on. (The failed statement aborted that
+            # transaction, and leaving the `with` rolled it back, so the next one starts clean.)
+            with self.cursor() as cur:
+                cur.execute("SELECT tailoring, telegram, digest FROM feature_settings WHERE id = 1")
+                return {**cur.fetchone(), "gmail": False}
 
     def update_features(self, **flags) -> dict:
-        cols = [k for k in flags if k in ("tailoring", "telegram", "digest")]
+        cols = [k for k in flags if k in ("tailoring", "telegram", "digest", "gmail")]
         if cols:
-            with self.cursor() as cur:
-                cur.execute("UPDATE feature_settings SET " + ", ".join(f"{c} = %s" for c in cols) + ", updated_at = now() WHERE id = 1",
-                            [bool(flags[c]) for c in cols])
+            try:
+                with self.cursor() as cur:
+                    cur.execute("UPDATE feature_settings SET " + ", ".join(f"{c} = %s" for c in cols) + ", updated_at = now() WHERE id = 1",
+                                [bool(flags[c]) for c in cols])
+            except psycopg.errors.UndefinedColumn:
+                raise LookupError("this database has no Gmail switch yet: run scripts/jobsearch migrate")
         return self.features()
 
     def set_application_status(self, job_id: int, status: str, note=None) -> str:
         with self.cursor() as cur:
             cur.execute("SELECT set_application_status(%s::bigint, %s, %s) AS s", (job_id, status, note))
             return cur.fetchone()["s"]
+
+    # ---- Gmail status tracking (migration 021): state of the reader, nothing about any email's text -----
+    def gmail_overview(self) -> dict:
+        """Counts and state only (gmail_overview()). Raises LookupError when migration 021 is not applied."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT gmail_overview() AS o")
+                overview = cur.fetchone()["o"]
+        except psycopg.errors.UndefinedFunction:
+            raise LookupError("the Gmail tables are not there yet: run scripts/jobsearch migrate")
+        overview["unclear"] = self.gmail_unclear_counts()          # step 6d; zeros before migration 023
+        return overview
+
+    def record_gmail_login(self, status: str, error: Optional[str], *, ran: bool = False) -> None:
+        """Record the result of a login check: ok | expired | error (gmail_state). `ran` also stamps last_run_at, as the scheduled
+        stage does. The error text is cut to the column's 300 characters."""
+        if status not in ("ok", "expired", "error"):
+            raise ValueError("status must be ok, expired or error")
+        params = (status, (error or None) and error[:300], ran)
+        base = ("UPDATE gmail_state SET token_status = %s, token_checked_at = now(), last_error = %s, "
+                "last_run_at = CASE WHEN %s THEN now() ELSE last_run_at END, updated_at = now()")
+        try:
+            try:
+                with self.cursor() as cur:       # a working login re-arms the digest's "your login stopped" alert (migration 024)
+                    cur.execute(base + (", login_alerted_at = NULL" if status == "ok" else "") + " WHERE id = 1", params)
+            except psycopg.errors.UndefinedColumn:
+                with self.cursor() as cur:       # a database that has not had migration 024 yet
+                    cur.execute(base + " WHERE id = 1", params)
+        except psycopg.errors.UndefinedTable:
+            raise LookupError("the Gmail tables are not there yet: run scripts/jobsearch migrate")
+
+    def gmail_state_row(self) -> dict:
+        """The settings the search starts from: lookback_days, from_now, search_cursor (a datetime or None)."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT lookback_days, from_now, search_cursor FROM gmail_state WHERE id = 1")
+                return cur.fetchone()
+        except psycopg.errors.UndefinedTable:
+            raise LookupError("the Gmail tables are not there yet: run scripts/jobsearch migrate")
+
+    def gmail_candidates(self, limit: int = 300) -> list[dict]:
+        """The applications a reply could be about (migration 022): job_id, company, title, job_status, app_status, last_activity."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT * FROM gmail_candidates(%s)", (limit,))
+                return cur.fetchall()
+        except psycopg.errors.UndefinedFunction:
+            raise LookupError("this database has no Gmail search yet: run scripts/jobsearch migrate")
+
+    def gmail_unseen(self, ids: list) -> list:
+        """The message ids (in the order given) that have not been looked at before."""
+        if not ids:
+            return []
+        with self.cursor() as cur:
+            cur.execute("SELECT message_id FROM gmail_seen WHERE message_id = ANY(%s)", (list(ids),))
+            seen = {row["message_id"] for row in cur.fetchall()}
+        return [i for i in ids if i not in seen]
+
+    def record_gmail_result(self, message_id: str, thread_id: Optional[str], outcome: str, job_id: Optional[int],
+                            suggestion: Optional[dict] = None) -> str:
+        """Record one email's outcome (and its suggestion) in one step; see gmail_record_result() in migration 022. -> the outcome
+        as stored: a suggestion that already exists, or a second one for the same job and status, is recorded as 'noise'."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT gmail_record_result(%s, %s, %s, %s::bigint, %s::jsonb) AS outcome",
+                            (message_id, thread_id or None, outcome, job_id, Json(suggestion) if suggestion is not None else None))
+                return cur.fetchone()["outcome"]
+        except psycopg.errors.UndefinedFunction:
+            raise LookupError("this database has no Gmail search yet: run scripts/jobsearch migrate")
+
+    def gmail_rescan(self) -> int:
+        """Forget where the search got to and re-open the emails that were looked at but not acted on (migration 022). -> how many."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT gmail_rescan() AS n")
+                return cur.fetchone()["n"]
+        except psycopg.errors.UndefinedFunction:
+            raise LookupError("this database has no Gmail search yet: run scripts/jobsearch migrate")
+
+    # ---- step 6e: the scheduled stage's record, and what the digest says about mail (migration 024) ----
+    def gmail_record_run(self, summary: dict, early: bool) -> bool:
+        """Store what the last run did (counts only) and whether it ended early. False on a database without migration 024."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT gmail_record_run(%s::jsonb, %s)", (Json(summary), bool(early)))
+            return True
+        except psycopg.errors.UndefinedFunction:
+            return False
+
+    def gmail_digest(self, limit: int = 5) -> Optional[dict]:
+        """What the Telegram digest says about mail: {"suggestions": [...], "total_new": n, "login_alert": bool}. None on a database
+        without migration 024 (the digest then says nothing about mail)."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT gmail_digest(%s) AS d", (limit,))
+                return cur.fetchone()["d"]
+        except (psycopg.errors.UndefinedFunction, psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+            return None
+
+    def gmail_digest_sent(self, ids: list, login: bool = False) -> int:
+        """The digest told you about these suggestions (and about the login, when `login`). -> how many suggestions were marked."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT gmail_digest_sent(%s::bigint[], %s) AS n", (list(ids or []), bool(login)))
+                return cur.fetchone()["n"]
+        except (psycopg.errors.UndefinedFunction, psycopg.errors.UndefinedTable, psycopg.errors.UndefinedColumn):
+            return 0
+
+    # ---- step 6d: the model looks at the emails the rules could not decide (migration 023) ----
+    def gmail_claim_unclear(self, limit: int, max_claims: int = 3) -> list[dict]:
+        """Claim up to `limit` unclear emails to ask the model about. Every claim is counted; an email claimed `max_claims` times
+        is parked. -> message_id, thread_id, job_id, company, title, job_status, app_status."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT * FROM gmail_claim_unclear(%s, %s)", (limit, max_claims))
+                return cur.fetchall()
+        except psycopg.errors.UndefinedFunction:
+            raise LookupError("this database has no Gmail model step yet: run scripts/jobsearch migrate")
+
+    def gmail_release_classify_claim(self, message_id: str) -> int:
+        """Give back a claim that cost nothing (the email could not be fetched, the API was down, the budget was paused)."""
+        with self.cursor() as cur:
+            cur.execute("SELECT gmail_release_classify_claim(%s) AS n", (message_id,))
+            return cur.fetchone()["n"]
+
+    def gmail_settle_unclear(self, message_id: str, thread_id: Optional[str], outcome: str, job_id: int,
+                             suggestion: Optional[dict] = None) -> str:
+        """Settle one unclear email as suggested (with its suggestion), noise or failed. -> the outcome as stored; 'gone' when
+        the email is no longer unclear (a rescan or another run got there first) and nothing was written."""
+        with self.cursor() as cur:
+            cur.execute("SELECT gmail_settle_unclear(%s, %s, %s, %s::bigint, %s::jsonb) AS outcome",
+                        (message_id, thread_id or None, outcome, job_id, Json(suggestion) if suggestion is not None else None))
+            return cur.fetchone()["outcome"]
+
+    def gmail_unclear_counts(self, max_claims: int = 3) -> dict:
+        """{"waiting": n, "parked": m}; zeros on a database without migration 023."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT gmail_unclear_counts(%s) AS c", (max_claims,))
+                return cur.fetchone()["c"]
+        except psycopg.errors.UndefinedFunction:
+            return {"waiting": 0, "parked": 0}
+
+    def gmail_classified_today(self) -> int:
+        """How many model calls for emails were logged today (the budget's time zone)."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT gmail_classified_today() AS n")
+                return cur.fetchone()["n"]
+        except psycopg.errors.UndefinedFunction:
+            raise LookupError("this database has no Gmail model step yet: run scripts/jobsearch migrate")
+
+    def record_gmail_search(self, cursor_at, *, ran: bool = True) -> None:
+        """A search finished. `cursor_at` (a datetime) moves where the next one starts, and is None when the search did not cover
+        everything (more mail than one run may open), which leaves the cursor where it was."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("UPDATE gmail_state SET search_cursor = coalesce(%s, search_cursor), "
+                            "last_run_at = CASE WHEN %s THEN now() ELSE last_run_at END, updated_at = now() WHERE id = 1", (cursor_at, ran))
+        except psycopg.errors.UndefinedTable:
+            raise LookupError("the Gmail tables are not there yet: run scripts/jobsearch migrate")
+
+    def update_gmail_settings(self, **fields) -> dict:
+        cols = [k for k in fields if k in ("lookback_days", "from_now")]
+        if cols:
+            try:
+                with self.cursor() as cur:
+                    cur.execute("UPDATE gmail_state SET " + ", ".join(f"{c} = %s" for c in cols) + ", updated_at = now() WHERE id = 1",
+                                [fields[c] for c in cols])
+            except psycopg.errors.UndefinedTable:
+                raise LookupError("the Gmail tables are not there yet: run scripts/jobsearch migrate")
+        return self.gmail_overview()
 
     # ---- runaway guards: refunds for attempts that cost nothing, Apify caps, parked jobs, global pause ----
     def release_score_claim(self, job_id: int) -> int:

@@ -1,5 +1,5 @@
-"""Stand-in APIs for testing: a fake Anthropic Messages API, a fake Apify API and a fake of ten public job-board and
-remote-feed APIs (StubBoards), served on localhost.
+"""Stand-in APIs for testing: a fake Anthropic Messages API, a fake Apify API, a fake of ten public job-board and
+remote-feed APIs (StubBoards) and a fake Google login plus Gmail API (StubGmail), served on localhost.
 
 Why: real calls cost money, and the interesting tests are about failure (outages, garbage replies, hung runs,
 loops). These servers let the REAL service code run end to end with every call counted and nothing billed.
@@ -94,6 +94,18 @@ def always_status(status: int) -> AnthropicHandler:
 def garbage_reply() -> AnthropicHandler:
     """A billed reply that is not the JSON we asked for."""
     return lambda n, body: (200, "Sorry, I cannot score this posting as JSON.", SCORING_USAGE)
+
+
+MAIL_USAGE = {"input_tokens": 900, "output_tokens": 40, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+
+
+def mail_verdict(signal: str = "none", confidence: str = "high", quote: str = "") -> AnthropicHandler:
+    """A billed reply to the email classifier (step 6d): the one-line JSON it asks for. `quote` may be a function of the request's
+    user text, so a test can quote the email it was sent."""
+    def handler(n: int, body: dict) -> tuple:
+        q = quote(body["messages"][0]["content"]) if callable(quote) else quote
+        return 200, json.dumps({"signal": signal, "confidence": confidence, "quote": q}), MAIL_USAGE
+    return handler
 
 
 def tailor_draft(patch: dict, *, then_status: Optional[int] = None, flawed: Optional[dict] = None) -> AnthropicHandler:
@@ -897,3 +909,281 @@ class StubBoards(_Server):
                      "path": path, "per_page": ARBEITNOW_PAGE, "to": start + len(sel) if sel else None,
                      "terms": "Stub of the Arbeitnow API: please do not abuse, link back.",
                      "info": "Jobs are ordered by the `created_at` timestamp, newest first. Use `?page=` to paginate."}}))
+
+
+
+# ----------------------------------------------------------------------------- fake Google login + Gmail
+
+GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+
+
+def _b64(text: str) -> str:
+    return base64.urlsafe_b64encode(text.encode("utf-8")).decode().rstrip("=")
+
+
+def gmail_message(id: str = "18f0a1c2b3d4e5f6", *, sender: str = "Acme Recruiting <jobs@acme.com>", subject: str = "Your application",
+                  text: str = "Thank you for applying.", html: Optional[str] = None, when: Optional[datetime] = None,
+                  thread: Optional[str] = None, dmarc: str = "pass", spf: str = "pass", dkim: str = "pass", header_from: str = "acme.com",
+                  auth_server: str = "mx.google.com", forged_auth: Optional[str] = None, attachments: int = 0,
+                  extra_headers: tuple = (), multipart: bool = True) -> dict:
+    """A Gmail `messages.get(format=full)` reply, in Gmail's own shape: headers (Google's Authentication-Results first, as Google
+    adds it), a MIME tree with base64url bodies, and `internalDate` in milliseconds. `forged_auth` adds a header the SENDER wrote,
+    below Google's, claiming everything passed."""
+    when = when or datetime(2026, 10, 12, 9, 30, tzinfo=timezone.utc)
+    headers = [{"name": "Authentication-Results", "value": f"{auth_server}; dkim={dkim} header.i=@{header_from}; spf={spf} "
+                                                          f"smtp.mailfrom={header_from}; dmarc={dmarc} (p=NONE sp=NONE dis=NONE) header.from={header_from}"},
+               {"name": "From", "value": sender}, {"name": "To", "value": "me@gmail.com"},
+               {"name": "Subject", "value": subject}, {"name": "Date", "value": format_datetime(when)}]
+    if forged_auth:
+        headers.append({"name": "Authentication-Results", "value": forged_auth})
+    headers += [{"name": n, "value": v} for n, v in extra_headers]
+    plain = {"mimeType": "text/plain", "headers": [{"name": "Content-Type", "value": 'text/plain; charset="UTF-8"'}], "body": {"size": len(text), "data": _b64(text)}}
+    parts = [plain]
+    if html is not None:
+        parts.append({"mimeType": "text/html", "headers": [{"name": "Content-Type", "value": 'text/html; charset="UTF-8"'}], "body": {"size": len(html), "data": _b64(html)}})
+    for n in range(attachments):
+        parts.append({"mimeType": "application/pdf", "filename": f"file{n}.pdf", "body": {"attachmentId": f"att{n}", "size": 1000}})
+    if multipart or html is not None or attachments:
+        payload = {"mimeType": "multipart/mixed", "headers": headers, "body": {"size": 0}, "parts": parts}
+    else:
+        payload = {**plain, "headers": headers + plain["headers"]}
+    return {"id": id, "threadId": thread or id, "labelIds": ["INBOX"], "snippet": text[:80], "internalDate": str(int(when.timestamp() * 1000)),
+            "sizeEstimate": len(text) + 500, "payload": payload}
+
+
+class StubGmail(_Server):
+    """Google's token endpoint and the Gmail API, served at `{url}/oauth/token` and `{url}/gmail/gmail/v1/users/me/...` (set
+    GMAIL_API_URL to `url`). Only the three calls the client makes exist: profile, list and get; there is no way to send, delete
+    or change anything, so a test that passes proves nothing it should not do was attempted.
+
+    `messages` is {id: gmail_message(...)}. A search returns every message whose date is inside the query's `after:` / `before:`
+    (epoch seconds; nothing else in `q` is interpreted, the stub records it in `queries`), newest first, `maxResults` at a time, with
+    `nextPageToken`.
+
+    `modes["token"]`: ok | invalid_grant (400, expired or revoked) | invalid_client (401) | overbroad (the answer also grants full
+    mailbox access) | no_scope (the answer does not say what it allows) | garbage (HTTP 200, not JSON) | no_token | server_error (500) |
+    server_error_once | rate_limited (429, Retry-After 7) | redirect (302 to another host) | short_lived (expires_in 1) |
+    disabled_client (400, the OAuth client was disabled) | inf_expiry (expires_in is Infinity).
+    The sign-in (grant_type=authorization_code, what `jobsearch gmail login` sends once the person approved in the browser) is
+    answered here too: `modes["auth"]`: ok | invalid_grant | no_refresh (no refresh token in the answer, as when the app was
+    approved before) | overbroad (the answer also grants full mailbox access); every form it received is kept in `exchanges`.
+    `modes["api"]`: ok | unauthorized_once (the first API call gets 401, as if the access token had just been revoked) | unauthorized
+    (always 401) | rate_limited (429) | rate_limited_403 | forbidden (403 insufficient permissions) | api_disabled (403 accessNotConfigured) |
+    forbidden_other (403, a quota reason) | not_found (404 on any path) | server_error (500) | server_error_once | garbage | redirect | slow (answers after `slow_seconds`) | drip (sends the headers, then
+    one byte every 0.15 s for a few seconds, the way a hostile server holds a connection open). `modes["message"]` is the same list
+    but only for messages.get, plus huge (a reply over 6 MB, streamed) and gone (404).
+
+    Counters: `token_requests` (the form of each token call), `api_log` (path, query dict, the Authorization header) in arrival
+    order, `issued` (access tokens handed out)."""
+
+    def __init__(self, messages: Optional[dict] = None, *, account: str = "jane.doe@gmail.com", refresh_token: str = "1//stub-refresh-token-0123456789",
+                 client_id: str = "123456789012-stubclientid0123456789.apps.googleusercontent.com", client_secret: str = "GOCSPX-stub-secret-0123456789",
+                 modes: Optional[dict] = None, auth_code: str = "stub-auth-code-0123456789"):
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                self.server.stub._api(self)
+
+            def do_POST(self):
+                self.server.stub._token(self)
+        super().__init__(H)
+        self.messages = dict(messages or {})
+        self.account, self.refresh_token, self.client_id, self.client_secret = account, refresh_token, client_id, client_secret
+        self.modes = dict(modes or {})
+        self.slow_seconds = 3.0
+        self.auth_code = auth_code
+        self.exchanges: list[dict] = []
+        self.token_requests: list[dict] = []
+        self.api_log: list[tuple] = []
+        self.issued: list[str] = []
+        self._valid: set = set()
+        self._once_done: set = set()
+        self._stop = threading.Event()
+
+    @property
+    def url(self) -> str:
+        return self.base
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        return super().__exit__(*exc)
+
+    @property
+    def queries(self) -> list:
+        return [q.get("q", [""])[0] for path, q, _ in self.api_log if path.endswith("/messages")]
+
+    def _first(self, key: str) -> bool:
+        with self.lock:
+            if key in self._once_done:
+                return False
+            self._once_done.add(key)
+            return True
+
+    @staticmethod
+    def _raw(h: BaseHTTPRequestHandler, status: int, ctype: str, body: bytes, extra: Optional[dict] = None) -> None:
+        h.send_response(status)
+        h.send_header("Content-Type", ctype)
+        h.send_header("Content-Length", str(len(body)))
+        for k, v in (extra or {}).items():
+            h.send_header(k, v)
+        h.end_headers()
+        h.wfile.write(body)
+
+    # -- the login ----------------------------------------------------------------------------------------------
+
+    def _token(self, h: BaseHTTPRequestHandler) -> None:
+        length = int(h.headers.get("Content-Length", 0))
+        form = {k: v[0] for k, v in parse_qs(h.rfile.read(length).decode()).items()}
+        with self.lock:
+            self.token_requests.append(form)
+        if not h.path.split("?")[0] == "/oauth/token":
+            return self._raw(h, 404, "application/json", b"{}")
+        mode = self.modes.get("token", "ok")
+        if mode == "redirect":
+            return self._raw(h, 302, "text/plain", b"", {"Location": "http://evil.example/steal"})
+        if mode == "slow":
+            self._stop.wait(self.slow_seconds)
+        if mode == "server_error" or (mode == "server_error_once" and self._first("token500")):
+            return self._raw(h, 500, "application/json", b'{"error":"backend_error"}')
+        if mode == "rate_limited":
+            return self._raw(h, 429, "application/json", b'{"error":"rate_limit_exceeded"}', {"Retry-After": "7"})
+        if mode == "garbage":
+            return self._raw(h, 200, "text/html", b"<html>not json</html>")
+        if form.get("grant_type") == "authorization_code":
+            return self._exchange(h, form)
+        if mode == "disabled_client":
+            return _json(h, 400, {"error": "disabled_client", "error_description": "The OAuth client was disabled."})
+        if mode == "invalid_grant" or form.get("refresh_token") != self.refresh_token or form.get("grant_type") != "refresh_token":
+            return _json(h, 400, {"error": "invalid_grant", "error_description": "Token has been expired or revoked."})
+        if mode == "invalid_client" or form.get("client_id") != self.client_id or form.get("client_secret") != self.client_secret:
+            return _json(h, 401, {"error": "invalid_client", "error_description": "The OAuth client was not found."})
+        if mode == "no_token":
+            return _json(h, 200, {"expires_in": 3599, "scope": GMAIL_SCOPE, "token_type": "Bearer"})
+        with self.lock:
+            token = f"ya29.stub-access-{len(self.issued) + 1:04d}-abcdefghijklmnop"
+            self.issued.append(token)
+            self._valid.add(token)
+        reply = {"access_token": token, "expires_in": 1 if mode == "short_lived" else float("inf") if mode == "inf_expiry" else 3599,
+                 "scope": GMAIL_SCOPE, "token_type": "Bearer"}
+        if mode == "overbroad":
+            reply["scope"] = GMAIL_SCOPE + " https://mail.google.com/"
+        if mode == "no_scope":
+            del reply["scope"]
+        _json(h, 200, reply)
+
+    def _exchange(self, h: BaseHTTPRequestHandler, form: dict) -> None:
+        with self.lock:
+            self.exchanges.append(form)
+        mode = self.modes.get("auth", "ok")
+        if mode == "invalid_grant" or form.get("code") != self.auth_code or not form.get("code_verifier"):
+            return _json(h, 400, {"error": "invalid_grant", "error_description": "Bad Request"})
+        if form.get("client_id") != self.client_id or form.get("client_secret") != self.client_secret:
+            return _json(h, 401, {"error": "invalid_client"})
+        if not form.get("redirect_uri", "").startswith("http://127.0.0.1:"):
+            return _json(h, 400, {"error": "redirect_uri_mismatch"})
+        with self.lock:
+            token = f"ya29.stub-access-{len(self.issued) + 1:04d}-abcdefghijklmnop"
+            self.issued.append(token)
+            self._valid.add(token)
+        reply = {"access_token": token, "expires_in": 3599, "refresh_token": self.refresh_token, "scope": GMAIL_SCOPE, "token_type": "Bearer"}
+        if mode == "no_refresh":
+            del reply["refresh_token"]
+        if mode == "overbroad":
+            reply["scope"] = GMAIL_SCOPE + " https://mail.google.com/"
+        _json(h, 200, reply)
+
+    # -- the API ------------------------------------------------------------------------------------------------
+
+    def _api(self, h: BaseHTTPRequestHandler) -> None:
+        path, _, qs = h.path.partition("?")
+        query = parse_qs(qs)
+        auth = h.headers.get("Authorization", "")
+        with self.lock:
+            self.api_log.append((path, query, auth))
+        prefix = "/gmail/gmail/v1/users/me"
+        if not path.startswith(prefix):
+            return self._raw(h, 404, "application/json", b"{}")
+        rest = path[len(prefix):]
+        is_message = rest.startswith("/messages/")
+        for scope in ("api", "message") if is_message else ("api",):
+            mode = self.modes.get(scope, "ok")
+            if mode == "redirect":
+                return self._raw(h, 302, "text/plain", b"", {"Location": "http://evil.example/steal"})
+            if mode == "slow":
+                self._stop.wait(self.slow_seconds)
+            if mode == "unauthorized" or (mode == "unauthorized_once" and self._first("api401" + scope)):
+                return _json(h, 401, {"error": {"code": 401, "status": "UNAUTHENTICATED", "message": "Invalid Credentials"}})
+            if mode == "rate_limited":
+                return self._raw(h, 429, "application/json", b'{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}', {"Retry-After": "9"})
+            if mode == "rate_limited_403":
+                return _json(h, 403, {"error": {"code": 403, "errors": [{"reason": "rateLimitExceeded"}], "status": "PERMISSION_DENIED"}})
+            if mode == "forbidden":
+                return _json(h, 403, {"error": {"code": 403, "errors": [{"reason": "insufficientPermissions"}], "status": "PERMISSION_DENIED"}})
+            if mode == "forbidden_other":
+                return _json(h, 403, {"error": {"code": 403, "errors": [{"reason": "quotaExceeded"}], "status": "PERMISSION_DENIED"}})
+            if mode == "not_found":
+                return _json(h, 404, {"error": {"code": 404, "status": "NOT_FOUND"}})
+            if mode == "api_disabled":
+                return _json(h, 403, {"error": {"code": 403, "errors": [{"reason": "accessNotConfigured"}], "status": "PERMISSION_DENIED"}})
+            if mode == "server_error" or (mode == "server_error_once" and self._first("api500" + scope)):
+                return _json(h, 500, {"error": {"code": 500, "status": "INTERNAL"}})
+            if mode == "garbage":
+                return self._raw(h, 200, "text/html", b"<html>not json</html>")
+            if mode == "drip":
+                h.send_response(200)
+                h.send_header("Content-Type", "application/json")
+                h.end_headers()
+                try:
+                    for _ in range(40):
+                        h.wfile.write(b" ")
+                        h.wfile.flush()
+                        if self._stop.wait(0.15):
+                            break
+                    h.wfile.write(b"{}")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+        if auth.removeprefix("Bearer ") not in self._valid:
+            return _json(h, 401, {"error": {"code": 401, "status": "UNAUTHENTICATED", "message": "Invalid Credentials"}})
+        if rest == "/profile":
+            return _json(h, 200, {"emailAddress": self.account, "messagesTotal": len(self.messages), "threadsTotal": len(self.messages), "historyId": "1"})
+        if rest == "/messages":
+            q = query.get("q", [""])[0]
+            lo, hi = re.search(r"\bafter:(\d+)", q), re.search(r"\bbefore:(\d+)", q)
+            def _within(i):
+                d = self.messages[i].get("internalDate")
+                if d is None:                                    # a message with no date (a test of exactly that) is always listed
+                    return True
+                return (not lo or int(d) / 1000 >= int(lo.group(1))) and (not hi or int(d) / 1000 < int(hi.group(1)))
+            inside = [i for i in self.messages if _within(i)]
+            ids = sorted(inside, key=lambda i: (int(self.messages[i].get("internalDate") or 0), i), reverse=True)      # newest first, as Gmail lists
+            size = int(query.get("maxResults", ["100"])[0])
+            start = int(query.get("pageToken", ["p0"])[0].lstrip("p") or 0)
+            page = ids[start:start + size]
+            reply: dict = {"resultSizeEstimate": len(ids)}
+            if page:
+                reply["messages"] = [{"id": i, "threadId": self.messages[i].get("threadId", i)} for i in page]
+            if start + size < len(ids):
+                reply["nextPageToken"] = f"p{start + size}"
+            return _json(h, 200, reply)
+        if is_message:
+            mid = rest[len("/messages/"):]
+            if self.modes.get("message") == "gone" or mid not in self.messages:
+                return _json(h, 404, {"error": {"code": 404, "status": "NOT_FOUND", "message": "Requested entity was not found."}})
+            if self.modes.get("message") == "huge":
+                chunk = b"x" * 65536
+                h.send_response(200)
+                h.send_header("Content-Type", "application/json")
+                h.end_headers()
+                try:
+                    h.wfile.write(b'{"id":"' + mid.encode() + b'","pad":"')
+                    for _ in range(100):                      # 6.5 MB
+                        h.wfile.write(chunk)
+                    h.wfile.write(b'"}')
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+                return
+            return _json(h, 200, self.messages[mid])
+        self._raw(h, 404, "application/json", b"{}")

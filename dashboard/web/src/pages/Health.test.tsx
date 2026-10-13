@@ -24,10 +24,11 @@ describe('the health page', () => {
     const list = await screen.findByRole('list', { name: 'Schedules' })
     const cards = within(list).getAllByRole('listitem')
     expect(cards.map((c) => within(c).getByRole('heading').textContent)).toEqual(
-      ['Collect jobs', 'Score jobs', 'Tailor applications', 'Send the digest'])
+      ['Collect jobs', 'Score jobs', 'Tailor applications', 'Send the digest', 'Check mail'])
     expect(cards[0]).toHaveTextContent('every 6 h · 18 per run')
     expect(cards[1]).toHaveTextContent('every 30 min · 25 per run · claude-haiku-5-5')
     expect(cards[3]).toHaveTextContent('daily at 08:00')
+    expect(cards[4]).toHaveTextContent('every 30 min · 20 per run')
     expect(within(cards[2]).getByText('Off')).toBeInTheDocument()
     expect(within(cards[2]).getByText('never')).toBeInTheDocument()       // an off stage that never ran
     expect(within(cards[0]).getByText('Last run').nextElementSibling?.querySelector('time')).toHaveAttribute('dateTime', '2026-10-12T06:00:00Z')

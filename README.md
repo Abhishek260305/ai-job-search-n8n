@@ -171,7 +171,7 @@ postgres/schema.sql       baseline tables and the upsert_job() dedupe function
 postgres/migrations/      numbered SQL migrations (postgres/migrate.sh); postgres/tests/ checks them
 scraper/                  the Python service: sources (JobSpy, Apify, company boards, feeds), safety, filters, scoring, tailoring, rendering, Telegram, budget
 dashboard/                the optional web dashboard: api/ (FastAPI), web/ (React), Dockerfile, db-init.sh
-workflows/                the six n8n workflows (importable JSON): a scheduler plus the pipeline
+workflows/                the seven n8n workflows (importable JSON): a scheduler plus the pipeline
 config/                   *.example.json files; your real resume/profile/search files are gitignored
 scripts/                  jobsearch (CLI), init-env, set-env, tunnel, n8n-credentials, n8n-import-workflows, backup, check-secrets, test
 cli/                      the CLI core (standard library only) and its tests

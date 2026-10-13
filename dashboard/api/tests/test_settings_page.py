@@ -32,11 +32,13 @@ def test_the_page_is_built_from_the_scrapers_reports(client, scraper):
     assert r.status_code == 200 and r.headers["cache-control"] == "no-store"
     body = r.json()
     assert body["timezone"] == "Asia/Kolkata" and body["paused"] is False
-    assert [s["name"] for s in body["schedules"]] == ["collect", "score", "tailor", "digest"]
-    collect, score, _, digest = body["schedules"]
+    assert [s["name"] for s in body["schedules"]] == ["collect", "score", "tailor", "digest", "mail"]
+    collect, score, _, digest, mail = body["schedules"]
+    assert mail["every_minutes"] == 30 and mail["batch"] == 20 and mail["model"] is None and mail["at_time"] is None
     assert collect["board_batch"] == 35 and score["board_batch"] is None and score["model"] == "claude-haiku-5-5"
     assert digest["at_time"] == "08:00:00" and digest["every_minutes"] is None
-    assert body["features"]["flags"] == {"tailoring": False, "telegram": True, "digest": True}
+    assert body["features"]["flags"] == {"tailoring": False, "telegram": True, "digest": True, "gmail": False}
+    assert body["features"]["effective"]["gmail"] == {"on": False, "reason": "switched off (jobsearch features set --gmail on)"}
     assert body["features"]["effective"]["tailoring"]["reason"].startswith("switched off")
     assert body["features"]["approval"] == "review" and body["features"]["approval_effective"] == "review"
     assert body["tailoring"]["approval"] == "review" and body["tailoring"]["max_score"] == 80
@@ -132,6 +134,24 @@ def test_feature_switches(client, scraper):
     assert patch(client, "/features", {"approval": "auto"}).status_code == 422
     assert patch(client, "/features", {"digest": "yes"}).status_code == 422
     assert patch(client, "/features", {"digest": 1}).status_code == 422
+
+
+def test_the_gmail_switch_is_forwarded_like_the_others_and_nothing_else_about_gmail_is_settable_here(client, scraper):
+    assert patch(client, "/features", {"gmail": True}).status_code == 200
+    assert scraper.writes() == [("set_features", {"gmail": True})]
+    assert patch(client, "/features", {"gmail": "yes"}).status_code == 422
+    assert patch(client, "/features", {"gmail": 1}).status_code == 422
+    for forbidden in ({"gmail_token": "x"}, {"lookback_days": 5}, {"token_status": "ok"}):
+        assert patch(client, "/features", forbidden).status_code == 422, forbidden
+    assert len(scraper.writes()) == 1
+
+
+def test_the_mail_stage_can_be_changed_and_run_like_the_others(client, scraper):
+    assert patch(client, "/schedules/mail", {"every_minutes": 60, "batch": 10}).status_code == 200
+    assert scraper.writes() == [("set_schedule", "mail", {"every_minutes": 60, "batch": 10})]
+    r = patch(client, "/schedules/mail/run", None, "post")
+    assert r.status_code == 200 and r.json()["requested"] == "mail"
+    assert ("run_schedule", "mail") in scraper.calls
 
 
 def test_tailoring_changes_never_reach_approval_models_or_notes(client, scraper):
@@ -230,3 +250,17 @@ def test_an_unreachable_scraper_is_a_503_not_a_500(client, scraper, call):
     scraper.fail = Unavailable("the scraper is not reachable right now")
     r = call(client)
     assert r.status_code == 503 and r.json() == {"detail": "the scraper is not reachable right now"}
+
+
+def test_a_scraper_that_does_not_know_gmail_yet_still_gives_a_working_page(settings, store, monkeypatch):
+    """The dashboard may be rebuilt before the scraper (or the other way round): no `gmail` in the reports must not be a 500."""
+    from tests.support import SCRAPER_FEATURES, FakeScraper
+    old = {**SCRAPER_FEATURES, "flags": {k: v for k, v in SCRAPER_FEATURES["flags"].items() if k != "gmail"},
+           "effective": {k: v for k, v in SCRAPER_FEATURES["effective"].items() if k != "gmail"}}
+    scraper = FakeScraper()
+    monkeypatch.setattr(scraper, "features", lambda: old)
+    c = TestClient(create_app(settings, store, scraper=scraper), base_url="http://localhost")
+    assert c.post("/api/login", json={"password": PASSWORD}).status_code == 204
+    r = c.get("/api/settings")
+    assert r.status_code == 200 and r.json()["features"]["flags"]["gmail"] is False
+    assert "gmail" not in r.json()["features"]["effective"]

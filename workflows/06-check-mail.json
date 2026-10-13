@@ -1,0 +1,99 @@
+{
+  "id": "js-mail",
+  "name": "06 Check mail",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 06 Check mail\nStarted by the scheduler (workflow 00), by default every 30 minutes, **only while the optional Gmail part is switched on and a Google login is in `.env`**. It makes one call to the service (`POST /mail/run`).\n\nThat call checks the login, searches your mailbox for replies to your applications (read-only, at most the schedule's batch of emails per run), asks Claude about the few replies the rules could not decide (under the spending caps, at most 10 a run and 40 a day), and writes status *suggestions*. **Nothing changes until you accept one in the dashboard.** The answer holds counts only, never an email's text.\n\n**Settings live in the database, not here:** `scripts/jobsearch gmail` (state, how far back the first search looks) and `scripts/jobsearch schedule` (how often, and how many emails a run opens). Switch the part on with `scripts/jobsearch features set --gmail on`. It does nothing while it is off or not configured.\n\n**Credentials needed:** none here (the service holds the Google login in `.env`).",
+        "height": 400,
+        "width": 420,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -120,
+        -420
+      ],
+      "id": "2f2721fc-2a60-5db2-a5d7-226ba6e2ce40",
+      "name": "Notes"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://scraper:8000/mail/run",
+        "options": {
+          "timeout": 300000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({}) }}"
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "id": "8a1dd556-0b8b-5757-8a21-baa2ff51ecba",
+      "name": "Check the mailbox",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nreturn [{ json: {\n  skipped: r.skipped || null,\n  checked: r.checked || 0,\n  suggested: r.suggested || 0,\n  login: r.login || null,\n  early: !!r.early,\n  error: r.error || null,\n} }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        0
+      ],
+      "id": "2c0803a1-aeea-5f43-af0b-25b67586b65b",
+      "name": "Summary"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        200
+      ],
+      "id": "cb5ddd55-bba0-5d9a-bd5d-3c0ed14a81e0",
+      "name": "Run on demand"
+    }
+  ],
+  "connections": {
+    "Check the mailbox": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run on demand": {
+      "main": [
+        [
+          {
+            "node": "Check the mailbox",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

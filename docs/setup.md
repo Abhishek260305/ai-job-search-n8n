@@ -145,7 +145,7 @@ scripts/jobsearch push-config        # checks profile.json and resume.json, then
 
 ```bash
 scripts/n8n-credentials.sh                    # creates "Anthropic API key" (and "Telegram bot", if you set a token) inside n8n
-scripts/n8n-import-workflows.sh --publish     # imports the six workflows (a scheduler plus the pipeline), starts them, restarts n8n
+scripts/n8n-import-workflows.sh --publish     # imports the seven workflows (a scheduler plus the pipeline), starts them, restarts n8n
 ```
 
 The schedules (when each stage runs and how much it does) are not part of the workflows: they are settings you can change later with `scripts/jobsearch schedule` ([customization.md](customization.md#schedules-when-things-run-and-how-much)); the defaults are to search every **6 hours**, score every 30 minutes, tailor every 15 minutes, and send the digest at 08:00.
@@ -227,7 +227,7 @@ scripts/n8n-import-workflows.sh --publish                                # updat
 scripts/jobsearch doctor
 ```
 
-**Migrate first, then rebuild the scraper.** A migration only adds things (new columns with defaults, new tables), so the old code keeps working after it. The reverse order does not: new code running before its migration fails to read settings the database does not have yet. For example, the company-board release needs migration 013, and without it the collect run and the ingest step fail for everyone, including people who never use company boards. Scoring is affected too: if the new scraper image runs before the migration, a scoring step can fail after the model call was already paid for. The scraper now copes with the missing columns, but the order is still migrate first, then rebuild.
+**Migrate first, then rebuild the scraper** (a release says when it is the other way round, as the Gmail foundations do: [gmail.md](gmail.md#adding-step-6a-to-an-existing-install)). A migration only adds things (new columns with defaults, new tables), so the old code usually keeps working after it. It does not always: a new row in a settings table can be one the old code does not know how to show. The reverse order does not: new code running before its migration fails to read settings the database does not have yet. For example, the company-board release needs migration 013, and without it the collect run and the ingest step fail for everyone, including people who never use company boards. Scoring is affected too: if the new scraper image runs before the migration, a scoring step can fail after the model call was already paid for. The scraper now copes with the missing columns, but the order is still migrate first, then rebuild.
 
 `python:3.12-slim` gets security fixes through new image pulls; rebuild with `--pull`.
 

@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { cadence, chartData, chartDescription, dateIn, formatMoney, meter, seriesKey, stageLabel } from './ops'
 
 describe('stageLabel and cadence', () => {
-  it('names the four stages and falls back to the raw name', () => {
+  it('names the stages and falls back to the raw name', () => {
     expect(stageLabel('collect')).toBe('Collect jobs')
     expect(stageLabel('digest')).toBe('Send the digest')
+    expect(stageLabel('mail')).toBe('Check mail')
     expect(stageLabel('new_thing')).toBe('new thing')
   })
 

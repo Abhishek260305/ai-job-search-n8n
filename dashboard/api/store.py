@@ -56,6 +56,14 @@ class HistoryChanged(StoreError):
     """The newest history entry of a job is not the one the page meant (or there is nothing to undo any more)."""
 
 
+class EmailNotFound(NotFound):
+    """No such email suggestion."""
+
+
+class EmailChanged(StoreError):
+    """The suggestion was decided (accepted, dismissed, superseded) since the page last read it."""
+
+
 class Conflict(StoreError):
     def __init__(self, message: str, current: str | None):
         super().__init__(message)
@@ -78,6 +86,8 @@ def _translate(e: psycopg.Error) -> StoreError | None:
         return Conflict(primary, getattr(diag, "message_detail", None))
     if state in _BY_SQLSTATE:
         return _BY_SQLSTATE[state](primary)
+    if state in ("40P01", "40001"):           # two changes to one job at the same moment: one of them lost; trying again is safe
+        return Unavailable("the database was busy with another change to this job: try again")
     if state == "42883":                      # a function of a newer migration: the image is ahead of the database
         log.warning("database needs its latest migration: %s", state)
         return Unavailable("the database needs its latest migration: run scripts/jobsearch migrate")
@@ -201,3 +211,35 @@ class PgStore:
         with self._conn() as conn:
             return conn.execute("SELECT dashboard_set_pause(%s, %s) AS p", (paused, reason)).fetchone()["p"]
 
+    # ---- version 6f: the email inbox (migration 025). Suggestions are only ever read and decided through these functions; the role
+    # has no access to the Gmail tables.
+    def email_inbox(self, state: str, limit: int) -> dict:
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_email_inbox(%s, %s) AS i", (state, limit)).fetchone()["i"]
+
+    def email_count(self) -> dict:
+        with self._conn() as conn:
+            return conn.execute("SELECT dashboard_email_count() AS c").fetchone()["c"]
+
+    def _email_call(self, sql: str, args: tuple) -> dict:
+        try:
+            with self._conn() as conn:
+                return conn.execute(sql, args).fetchone()["r"]
+        except NotFound as e:
+            if "suggestion" in str(e):
+                raise EmailNotFound(str(e)) from None
+            raise                                   # the job itself is gone
+        except Conflict as e:
+            if e.current is None:                   # "already accepted / dismissed", not a status that moved
+                raise EmailChanged(str(e)) from None
+            raise
+
+    def email_accept(self, suggestion_id: int, expected: str, acknowledged: bool) -> dict:
+        """The change, made by the same function as a click on the board: the answer names the history entry (what Undo is tied to)."""
+        return self._email_call("SELECT dashboard_email_accept(%s, %s, %s) AS r", (suggestion_id, expected, acknowledged))
+
+    def email_dismiss(self, suggestion_id: int) -> dict:
+        return self._email_call("SELECT dashboard_email_dismiss(%s) AS r", (suggestion_id,))
+
+    def email_restore(self, suggestion_id: int) -> dict:
+        return self._email_call("SELECT dashboard_email_restore(%s) AS r", (suggestion_id,))

@@ -9,6 +9,7 @@ Short answer: **no loop can spend without limit.** Every path that costs money h
 | **Scoring** (Claude Haiku, about $0.0003 a job) | the 30-minute scoring run | 1. **Spending caps** ($10 a month, $1.50 a day by default): the worst-case cost of a batch is reserved *before* any job is claimed, and at a cap nothing is claimed. 2. **Counted claims:** every attempt to score a job is counted; after **6** unfinished attempts, or **3** unusable replies, the job is *parked* and never retried until you re-queue it. 3. **Refunds:** an attempt that cost nothing (the API was down) is handed back, so an outage never parks healthy jobs. 4. A job that scores is never scored again. |
 | **Tailoring** (Claude Sonnet + a Haiku fact check, about $0.05 an application) | the 15-minute tailor run | the same spending caps, checked per job; at most **3** claims per job (then parked), at most **2** failed drafts; one draft plus **one** revision per attempt; a job that has an application is never claimed again; `daily_limit` if you set one; a failure *after* a billed draft is counted, a failure before anything was billed is refunded |
 | **Tailoring on request** (the dashboard's "Tailor this job": the same Claude calls, started by a person) | one click | the same spending caps, priced at the worst case before it starts; the cost shown and **agreed to** before it runs (the scraper refuses if it would now be more); **one run at a time**; a **two-minute cooldown** per job (kept across a scraper restart) so a double click or a retry cannot pay twice; every condition **checked again inside the tailoring lock** right before spending (it never queues behind a scheduled run); the PDF service checked before a draft is paid for; not while the Tailoring switch is off, nor while paused, nor for an application already submitted. The automatic `daily_limit` and the failure counting that parks jobs do not apply: you asked for it, and the caps still hold |
+| **Gmail classification** (Claude Haiku, under $0.0003 an email, only for replies the rules could not decide; step 6d, [gmail.md](gmail.md#the-model-step-6d)) | the `mail` stage once the Gmail part is on | the same spending caps (the worst case of each call is priced before the email is claimed and again before each call); at most **10** calls a run (a ceiling, whatever batch is asked for) and **40** a day; only jobs that can get a reply; at most **3** claims per email (then parked), refunded when nothing was spent; the first failed call ends the run; an email that carries instructions for a reader is never sent; the answer is validated and its quote must be in the email; a 150-token reply limit |
 | **Apify** (LinkedIn search, about $0.01 to $0.05 a run) | the 6-hour collect run | its own **monthly ($15) and daily ($0.50) caps**; a run starts only if its hard charge limit still fits in what is left of the budget; **at most 2 runs per search**; each run carries a hard `maxTotalChargeUsd`; a run that hangs is **aborted after 10 minutes**; a failed run that had started is counted at 1.5 times its estimate; if the budget cannot be read, **nothing is started** |
 | **Company boards and remote feeds** | free: nothing is billed; the risk is hammering the sources | see [below](#company-boards-and-remote-feeds) |
 | **Scheduler** | starting the stages | a stage is marked as started the instant it is claimed, so a slow run is never started twice; a failed stage is *not* retried until its next turn; minimum intervals (collect at least 15 minutes); and the **global pause** below |
@@ -34,6 +35,23 @@ Real service code and real SQL, a throwaway database, and stand-in APIs set to m
 | Apify: every start refused | **$0** |
 | Apify: a run that never finishes | polled **120** times, then aborted once |
 | scheduler: 2,000 ticks in the same minute | each stage started **once** |
+| Gmail search: a 605-email mailbox, 20 opened per run | each email opened **once**, at most **20** per run, no duplicate suggestions, **0** Claude calls |
+| Gmail search: 1,300 matches in one search window, the one real reply the oldest | finished in **14** runs, every email recorded once, at most **120** Gmail calls in a run |
+| Gmail model: Claude down (HTTP 529) for 30 hours of runs, 200 emails waiting | **0** billed calls, **0** emails wrongly parked, every claim refunded |
+| Gmail model: replies that are never usable, 5 emails, 40 runs | exactly **3** calls per email, then all parked |
+| Gmail model: ten runs back to back (inside the lease), bad replies | **1** call per email |
+| Gmail model: 200 emails waiting, good replies, 30 runs | **40** calls (the day's limit), one pending suggestion, none "high" |
+| Gmail model: a daily cap of $0.001, 200 emails waiting | stops at **$0.00066** |
+| Gmail model: 20 emails that carry instructions for the reader | **0** calls |
+| Gmail model: a model "sure" of a quote that is not in the email | **0** suggestions |
+| Gmail stage: one mailbox, one run (a rules reply, an unclear reply, noise) | **3** emails opened, **1** billed Claude call, one rules and one model suggestion (never high), each announced once, **0** opened again by five more runs |
+| Gmail stage: Gmail answers 429 for 30 runs | **30** early runs counted, **0** Claude calls; one clean run resets the count |
+| Gmail stage: Claude down for 20 runs | **0** billed, **0** parked, the rules' suggestion still made, the unclear email read once Claude is back |
+| Gmail stage: the login expires | **0** rows written, the digest says so once, a working login clears it |
+| Gmail search: ten more runs over the same mailbox | **0** emails opened again |
+| Gmail search: an expired login | **0** rows written |
+| Gmail search: Gmail answers 429 to everything, 30 runs | **30** calls (one per run, never retried), the cursor does not move |
+| scheduler: the mail stage while the Gmail part is off, 500 ticks | **0** starts |
 | scheduler paused, with "run now" requests | **0** starts |
 
 Run it yourself any time (it costs nothing): see [testing.md](testing.md#the-runaway-rehearsal).

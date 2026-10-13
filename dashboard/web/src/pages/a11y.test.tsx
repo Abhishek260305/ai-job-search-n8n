@@ -6,7 +6,7 @@ import axe from 'axe-core'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { renderApp } from '@/test/render'
-import { HEALTH, jobDetail, jobPage, jobRow, server, TRACKING, unauthorized } from '@/test/server'
+import { emailItem, HEALTH, jobDetail, jobPage, jobRow, server, TRACKING, unauthorized } from '@/test/server'
 
 /** `popup`: a menu is open. Radix renders it in a portal outside the landmarks, as popups are; the rest still applies. */
 async function violations({ popup = false } = {}): Promise<string[]> {
@@ -220,6 +220,30 @@ describe('accessibility (axe)', () => {
     renderApp('/?q=nothing')
     await screen.findByText('No jobs match these filters.')
     await screen.findAllByRole('alert')
+    expect(await violations()).toEqual([])
+  })
+
+  it('the email page, with a flagged suggestion, a stale one, and the tabs', async () => {
+    server.use(
+      http.get('/api/email/count', () => HttpResponse.json({ enabled: true, pending: 3 })),
+      http.get('/api/email', () => HttpResponse.json({
+        enabled: true, login: 'ok', counts: { pending: 3, accepted: 1, dismissed: 0 },
+        items: [
+          emailItem(1),
+          emailItem(2, { signal: 'offer', proposed_status: 'offer', confidence: 'low', flags: ['phishing_risk', 'unverified_sender', 'classified_by_model'], needs_ack: true, source: 'model', company: 'Beta' }),
+          emailItem(3, { stale: true, can_accept: false, current_status: 'rejected', company: 'Gamma' }),
+        ],
+      })),
+    )
+    renderApp('/email')
+    await screen.findByRole('heading', { name: /Beta/ })
+    expect(await violations()).toEqual([])
+  })
+
+  it('the email page when the part is off, and when the login expired', async () => {
+    server.use(http.get('/api/email', () => HttpResponse.json({ enabled: false, login: 'none', counts: { pending: 0, accepted: 0, dismissed: 0 }, items: [] })))
+    renderApp('/email')
+    await screen.findByRole('note')
     expect(await violations()).toEqual([])
   })
 })

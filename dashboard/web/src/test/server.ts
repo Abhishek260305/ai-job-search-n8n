@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
-import type { Board, Health, JobDetail, JobPage, JobRow, SearchPage, SettingsPage, Spend, Stats, Summary, JobEvent, Tracking } from '@/api/types'
+import type { Board, EmailInbox, EmailItem, Health, JobDetail, JobPage, JobRow, SearchPage, SettingsPage, Spend, Stats, Summary, JobEvent, Tracking } from '@/api/types'
 
 export const ME = { authenticated: true, expires_at: '2026-10-19T09:30:00Z' }
 
@@ -37,6 +37,8 @@ export const HEALTH: Health = {
       last_run_at: null, next_run_at: null, overdue: false, feature_off: false },
     { name: 'digest', enabled: true, every_minutes: null, at_time: '08:00:00', batch: 10, model: null,
       last_run_at: '2026-10-12T02:30:00Z', next_run_at: '2026-10-13T02:30:00Z', overdue: false, feature_off: false },
+    { name: 'mail', enabled: true, every_minutes: 30, at_time: null, batch: 20, model: null,
+      last_run_at: null, next_run_at: null, overdue: false, feature_off: true },
   ],
   queue: { waiting_to_score: 0, waiting_over_3h: 0, last_scored_at: '2026-10-12T09:10:00Z' },
   parked: { total: 0, items: [] },
@@ -76,13 +78,16 @@ export const SETTINGS: SettingsPage = {
       last_run_at: null, next_run_at: null },
     { name: 'digest', enabled: true, every_minutes: null, at_time: '08:00', batch: 10, model: null, board_batch: null, run_now: false,
       last_run_at: '2026-10-12T02:30:00Z', next_run_at: '2026-10-13T02:30:00Z' },
+    { name: 'mail', enabled: true, every_minutes: 30, at_time: null, batch: 20, model: null, board_batch: null, run_now: false,
+      last_run_at: null, next_run_at: null },
   ],
   features: {
-    flags: { tailoring: false, telegram: true, digest: true },
+    flags: { tailoring: false, telegram: true, digest: true, gmail: false },
     effective: {
-      tailoring: { on: false, reason: 'switched off (jobsearch features set tailoring on)' },
+      tailoring: { on: false, reason: 'switched off (jobsearch features set --tailoring on)' },
       telegram: { on: true, reason: '' },
       digest: { on: true, reason: '' },
+      gmail: { on: false, reason: 'switched off (jobsearch features set --gmail on)' },
     },
     approval: 'review',
     approval_effective: 'review',
@@ -90,8 +95,8 @@ export const SETTINGS: SettingsPage = {
   tailoring: { mode: 'auto', min_score: null, max_score: 80, daily_limit: 5, approval: 'review', cover_letter: true, max_pages: 2, paper: 'a4', model: 'claude-sonnet-5-5' },
   budget: { monthly_cap_usd: 10, daily_cap_usd: 1.5, warn_pct: 80, apify_monthly_cap_usd: 15, apify_daily_cap_usd: 0.5 },
   limits: {
-    min_every: { collect: 15, score: 5, tailor: 5, digest: 60 }, max_every: 10080,
-    max_batch: { collect: 50, score: 50, tailor: 10, digest: 50 }, max_board_batch: 200,
+    min_every: { collect: 15, score: 5, tailor: 5, digest: 60, mail: 15 }, max_every: 10080,
+    max_batch: { collect: 50, score: 50, tailor: 10, digest: 50, mail: 50 }, max_board_batch: 200,
   },
 }
 
@@ -132,6 +137,20 @@ export function boardCard(id: number, overrides: Partial<Board['columns'][number
     applied_at: null, deadline: null, closing_soon: false, has_resume: false, has_cover_letter: false, needs_attention: false,
     follow_up: null, status_since: '2026-10-10T10:00:00Z', ...overrides,
   }
+}
+
+/** One suggestion shaped like the API's EmailItem. */
+export function emailItem(id: number, overrides: Partial<EmailItem> = {}): EmailItem {
+  return {
+    id, job_id: 3, company: 'Company 3', title: 'Engineer 3', job_status: 'applied', current_status: 'applied', received_at: '2026-10-12T08:00:00Z',
+    from_domain: 'company3.com', subject: 'Interview invitation', excerpt: 'We would like to schedule a call.', signal: 'interview',
+    proposed_status: 'interview', status_at_proposal: 'applied', confidence: 'medium', source: 'rules', flags: [], state: 'pending',
+    created_at: '2026-10-12T08:05:00Z', decided_at: null, event_id: null, stale: false, needs_ack: false, can_accept: true, can_undo: false, can_restore: false, ...overrides,
+  }
+}
+
+export const EMAIL_INBOX: EmailInbox = {
+  enabled: true, login: 'ok', counts: { pending: 0, accepted: 0, dismissed: 0 }, items: [],
 }
 
 export const BOARD: Board = {
@@ -219,6 +238,8 @@ export const server = setupServer(
   http.get('/api/jobs', () => HttpResponse.json(jobPage([jobRow(1), jobRow(2)]))),
   http.get('/api/board', () => HttpResponse.json(BOARD)),
   http.get('/api/stats', () => HttpResponse.json(STATS)),
+  http.get('/api/email/count', () => HttpResponse.json({ enabled: false, pending: 0 })),
+  http.get('/api/email', () => HttpResponse.json(EMAIL_INBOX)),
   http.get('/api/jobs/:id/events', () => HttpResponse.json(EVENTS)),
   http.get('/api/jobs/:id/tracking', () => HttpResponse.json(NO_TRACKING)),
   http.get('/api/jobs/:id/tailor', () => HttpResponse.json({ state: 'idle' })),

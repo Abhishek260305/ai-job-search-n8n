@@ -20,7 +20,8 @@ Pick the line that matches what you are trying to do.
 | | |
 |---|---|
 | [commands.md](commands.md) | the `jobsearch` CLI, the Claude Code slash commands, the Telegram commands, your config files |
-| [workflows.md](workflows.md) | the six n8n workflows (a scheduler plus the pipeline), how to install, run and tune them |
+| [workflows.md](workflows.md) | the seven n8n workflows (a scheduler plus the pipeline), how to install, run and tune them |
+| [gmail.md](gmail.md) | the optional Gmail part (Phase 6): what is built, how it will work, privacy and cost |
 | [tailoring.md](tailoring.md) | resume and cover-letter generation, the honesty checks, review, settings |
 | [budget.md](budget.md) | spend logging, the hard caps (Claude and Apify), how to set the Anthropic Console limit |
 | [runaway-protection.md](runaway-protection.md) | why nothing can loop and burn credits, and how to stop everything fast |

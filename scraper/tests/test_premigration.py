@@ -145,3 +145,209 @@ def test_board_batch_other_database_errors_still_propagate(conns):
 def test_board_batch_reads_the_column_when_present(conns, monkeypatch):
     monkeypatch.setattr(FakeCursor, "fetchone", lambda self: {"board_batch": 12})
     assert db.PgStore("").board_batch() == 12
+
+
+# ---- migration 021 (the Gmail part): a scraper image that runs before it is applied must not break the others
+
+OLD_FLAGS = {"tailoring": True, "telegram": True, "digest": True}
+
+
+def test_the_features_read_works_without_the_gmail_column_and_reports_gmail_off(conns, monkeypatch):
+    conns.fail_on = ("digest, gmail", psycopg.errors.UndefinedColumn('column "gmail" does not exist'))
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: dict(OLD_FLAGS))
+    assert db.PgStore("").features() == {**OLD_FLAGS, "gmail": False}
+    assert conns.opened[0].closed and conns.opened[0].exit_exc is psycopg.errors.UndefinedColumn, "the failed attempt was rolled back and closed"
+
+
+def test_the_features_read_includes_gmail_when_the_column_exists(conns, monkeypatch):
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: {**OLD_FLAGS, "gmail": True})
+    assert db.PgStore("").features()["gmail"] is True
+    assert len(conns.opened) == 1
+
+
+def test_other_database_errors_while_reading_features_still_propagate(conns):
+    conns.fail_on = ("digest, gmail", psycopg.errors.OperationalError("server closed the connection"))
+    with pytest.raises(psycopg.errors.OperationalError):
+        db.PgStore("").features()
+
+
+def test_the_mail_overview_of_an_old_database_is_a_clear_message(conns):
+    conns.fail_on = ("gmail_overview", psycopg.errors.UndefinedFunction("function gmail_overview() does not exist"))
+    with pytest.raises(LookupError, match="scripts/jobsearch migrate"):
+        db.PgStore("").gmail_overview()
+    assert conns.opened[0].closed
+
+
+def test_other_errors_while_reading_the_mail_overview_still_propagate(conns):
+    conns.fail_on = ("gmail_overview", psycopg.errors.OperationalError("server closed the connection"))
+    with pytest.raises(psycopg.errors.OperationalError):
+        db.PgStore("").gmail_overview()
+
+
+def test_the_scheduler_tick_still_works_on_a_database_without_the_gmail_column(conns, monkeypatch):
+    conns.fail_on = ("digest, gmail", psycopg.errors.UndefinedColumn('column "gmail" does not exist'))
+    seen = {}
+
+    def fetchone(self):
+        return dict(OLD_FLAGS)
+
+    def fetchall(self):
+        seen["claimed"] = self.sql
+        return [{"name": "collect", "batch": 18, "model": None}]
+    monkeypatch.setattr(FakeCursor, "fetchone", fetchone)
+    monkeypatch.setattr(FakeCursor, "fetchall", fetchall, raising=False)
+    monkeypatch.setattr(A, "_store", db.PgStore(""))
+    r = TestClient(A.app).post("/schedule/tick")
+    assert r.status_code == 200, r.text
+    assert "mail" in r.json()["skipped"], "no Gmail column means Gmail is off, so the mail stage is not claimed"
+
+
+def test_update_features_writes_the_gmail_column_and_ignores_unknown_names(conns, monkeypatch):
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: {**OLD_FLAGS, "gmail": True})
+    db.PgStore("").update_features(gmail=True, bogus=True)
+    writes = [s for c in conns.opened for s in c.statements if s.startswith("UPDATE feature_settings")]
+    assert len(writes) == 1 and "gmail = %s" in writes[0] and "bogus" not in writes[0]
+
+
+def test_update_gmail_settings_writes_only_the_two_settings(conns, monkeypatch):
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: {"o": {"lookback_days": 30}, "c": {"waiting": 0, "parked": 0}})
+    out = db.PgStore("").update_gmail_settings(lookback_days=30, from_now=True, token_status="ok", search_cursor="now")
+    writes = [s for c in conns.opened for s in c.statements if s.startswith("UPDATE gmail_state")]
+    assert len(writes) == 1 and "lookback_days = %s" in writes[0] and "from_now = %s" in writes[0]
+    assert "token_status" not in writes[0] and "search_cursor" not in writes[0], "the login state and the cursor are not settings"
+    assert out == {"lookback_days": 30, "unclear": {"waiting": 0, "parked": 0}}, "the overview carries the model step's counts (zeros before migration 023)"
+
+
+def test_updating_the_gmail_settings_on_an_unmigrated_database_is_the_friendly_message(conns):
+    conns.fail_on = ("UPDATE gmail_state", psycopg.errors.UndefinedTable('relation "gmail_state" does not exist'))
+    with pytest.raises(LookupError, match="scripts/jobsearch migrate"):
+        db.PgStore("").update_gmail_settings(lookback_days=30)
+    assert conns.opened[0].closed and conns.opened[0].exit_exc is psycopg.errors.UndefinedTable
+
+
+def test_switching_gmail_on_in_an_unmigrated_database_is_the_friendly_message(conns):
+    conns.fail_on = ("UPDATE feature_settings", psycopg.errors.UndefinedColumn('column "gmail" of relation "feature_settings" does not exist'))
+    with pytest.raises(LookupError, match="scripts/jobsearch migrate"):
+        db.PgStore("").update_features(gmail=True)
+
+
+def test_other_errors_while_writing_these_settings_still_propagate(conns):
+    conns.fail_on = ("UPDATE gmail_state", psycopg.errors.OperationalError("server closed the connection"))
+    with pytest.raises(psycopg.errors.OperationalError):
+        db.PgStore("").update_gmail_settings(from_now=True)
+    conns.fail_on = ("UPDATE feature_settings", psycopg.errors.OperationalError("server closed the connection"))
+    with pytest.raises(psycopg.errors.OperationalError):
+        db.PgStore("").update_features(gmail=True)
+
+
+def test_the_other_switches_still_work_on_a_database_without_the_gmail_column(conns, monkeypatch):
+    """Turning tailoring off must not need the new column: only a gmail change names it."""
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: dict(OLD_FLAGS))
+    db.PgStore("").update_features(tailoring=False)
+    writes = [s for c in conns.opened for s in c.statements if s.startswith("UPDATE feature_settings")]
+    assert len(writes) == 1 and "gmail" not in writes[0]
+
+
+def test_recording_a_login_check_writes_the_status_and_cuts_the_error(conns):
+    store = db.PgStore("")
+    store.record_gmail_login("error", "x" * 500, ran=True)
+    store.record_gmail_login("ok", None)
+    writes = [s for c in conns.opened for s in c.statements if s.startswith("UPDATE gmail_state")]
+    assert len(writes) == 2 and all("token_status = %s" in w and "token_checked_at = now()" in w for w in writes)
+
+
+def test_a_bad_login_status_is_refused_before_the_database(conns):
+    with pytest.raises(ValueError):
+        db.PgStore("").record_gmail_login("great", None)
+    assert conns.opened == []
+
+
+def test_recording_a_login_check_on_an_unmigrated_database_is_the_friendly_message(conns):
+    conns.fail_on = ("UPDATE gmail_state", psycopg.errors.UndefinedTable('relation "gmail_state" does not exist'))
+    with pytest.raises(LookupError, match="scripts/jobsearch migrate"):
+        db.PgStore("").record_gmail_login("ok", None)
+
+
+# ---- migration 022 (the Gmail search): friendly messages on an old database, and what the store sends
+
+def test_the_candidates_of_an_unmigrated_database_are_a_clear_message(conns):
+    conns.fail_on = ("gmail_candidates", psycopg.errors.UndefinedFunction("function gmail_candidates(integer) does not exist"))
+    with pytest.raises(LookupError, match="scripts/jobsearch migrate"):
+        db.PgStore("").gmail_candidates()
+    assert conns.opened[0].closed
+
+
+def test_recording_a_result_on_an_unmigrated_database_is_a_clear_message(conns):
+    conns.fail_on = ("gmail_record_result", psycopg.errors.UndefinedFunction("function does not exist"))
+    with pytest.raises(LookupError, match="scripts/jobsearch migrate"):
+        db.PgStore("").record_gmail_result("m1", "t1", "noise", None)
+
+
+def test_other_errors_while_recording_still_propagate(conns):
+    conns.fail_on = ("gmail_record_result", psycopg.errors.CheckViolation("new row violates check constraint"))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.PgStore("").record_gmail_result("m1", "t1", "suggested", 1, {"signal": "interview"})
+
+
+def test_the_state_row_of_an_unmigrated_database_is_a_clear_message(conns):
+    conns.fail_on = ("FROM gmail_state", psycopg.errors.UndefinedTable('relation "gmail_state" does not exist'))
+    with pytest.raises(LookupError, match="scripts/jobsearch migrate"):
+        db.PgStore("").gmail_state_row()
+
+
+def test_asking_which_ids_are_new_for_no_ids_does_not_touch_the_database(conns):
+    assert db.PgStore("").gmail_unseen([]) == [] and conns.opened == []
+
+
+def test_unseen_ids_keep_their_order_and_drop_the_seen_ones(conns, monkeypatch):
+    monkeypatch.setattr(FakeCursor, "fetchall", lambda self: [{"message_id": "b"}], raising=False)
+    assert db.PgStore("").gmail_unseen(["a", "b", "c"]) == ["a", "c"]
+
+
+def test_a_search_that_was_not_complete_leaves_the_cursor_alone_in_the_statement(conns):
+    db.PgStore("").record_gmail_search(None)
+    sql = [s for c in conns.opened for s in c.statements if s.startswith("UPDATE gmail_state")][0]
+    assert "coalesce(%s, search_cursor)" in sql and "last_run_at" in sql
+
+
+def test_a_rescan_of_an_unmigrated_database_is_a_clear_message(conns):
+    conns.fail_on = ("gmail_rescan", psycopg.errors.UndefinedFunction("function gmail_rescan() does not exist"))
+    with pytest.raises(LookupError, match="scripts/jobsearch migrate"):
+        db.PgStore("").gmail_rescan()
+
+
+def test_a_rescan_returns_how_many_rows_were_reopened(conns, monkeypatch):
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: {"n": 12})
+    assert db.PgStore("").gmail_rescan() == 12
+
+
+# ---- migration 024 (the stage's record and the digest): an old database must not crash the new image
+
+def test_a_working_login_re_arms_the_digests_login_alert_and_other_statuses_do_not(conns):
+    store = db.PgStore("")
+    store.record_gmail_login("ok", None)
+    store.record_gmail_login("expired", "x")
+    writes = [s for c in conns.opened for s in c.statements if s.startswith("UPDATE gmail_state")]
+    assert "login_alerted_at = NULL" in writes[0] and "login_alerted_at" not in writes[1]
+
+
+def test_recording_a_login_check_before_migration_024_falls_back_to_the_old_statement(conns):
+    conns.fail_on = ("login_alerted_at", psycopg.errors.UndefinedColumn('column "login_alerted_at" of relation "gmail_state" does not exist'))
+    db.PgStore("").record_gmail_login("ok", None, ran=True)
+    writes = [s for c in conns.opened for s in c.statements if s.startswith("UPDATE gmail_state")]
+    assert len(writes) == 2 and "login_alerted_at" in writes[0] and "login_alerted_at" not in writes[1], "the new statement was refused, then the old one ran"
+
+
+def test_the_stages_record_and_the_digests_mail_are_quiet_before_migration_024(conns):
+    conns.fail_on = ("gmail_", psycopg.errors.UndefinedFunction("function gmail_record_run does not exist"))
+    store = db.PgStore("")
+    assert store.gmail_record_run({"search": {}}, False) is False
+    assert store.gmail_digest(5) is None
+    assert store.gmail_digest_sent([1, 2], True) == 0
+
+
+def test_the_digest_marks_nothing_it_was_not_given(monkeypatch, conns):
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: {"n": 0})
+    db.PgStore("").gmail_digest_sent([], False)
+    sent = [s for c in conns.opened for s in c.statements if "gmail_digest_sent" in s]
+    assert len(sent) == 1

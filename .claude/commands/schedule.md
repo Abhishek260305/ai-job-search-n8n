@@ -1,6 +1,6 @@
 ---
-description: Show or change when each stage runs (collect, score, tailor, digest) and how much each run does.
-argument-hint: [collect|score|tailor|digest] [every 6h | at 08:00 | batch N | on | off | run]
+description: Show or change when each stage runs (collect, score, tailor, digest, mail) and how much each run does.
+argument-hint: [collect|score|tailor|digest|mail] [every 6h | at 08:00 | batch N | on | off | run]
 ---
 
 # /schedule

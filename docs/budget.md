@@ -1,6 +1,6 @@
 # Budget: logging and a hard cap on paid usage
 
-The pipeline calls a paid model API for three things: **scoring** jobs, **tailoring** applications, and the **fact check** on tailored text. Two independent safeguards keep that bounded, and every call is logged (with its purpose) so you can see exactly what was spent.
+The pipeline calls a paid model API for three things: **scoring** jobs, **tailoring** applications, and the **fact check** on tailored text; the optional [Gmail part](gmail.md#the-model-step-6d) adds a fourth, classifying the replies the rules could not decide (purpose `mail_classify`). Two independent safeguards keep that bounded, and every call is logged (with its purpose) so you can see exactly what was spent.
 
 | Layer | Where | What it does |
 |---|---|---|

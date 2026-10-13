@@ -83,9 +83,17 @@ class AnthropicClient:
                 last = AnthropicError(f"could not reach the Anthropic API ({type(ex).__name__})", retryable=True)
             else:
                 if r.status_code == 200:
-                    data = r.json()
-                    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
-                    return Reply(text=text, usage=data.get("usage") or {}, stop_reason=data.get("stop_reason"))
+                    try:
+                        data = r.json()
+                        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+                        return Reply(text=text, usage=data.get("usage") or {}, stop_reason=data.get("stop_reason"))
+                    except (ValueError, AttributeError, TypeError, RecursionError):
+                        # a 200 whose body is not the reply shape (a proxy page, a cut-off body): a named failure, not a crash
+                        last = AnthropicError("Anthropic API returned a reply that could not be read", 200, retryable=True)
+                        if attempt == self.retries:
+                            break
+                        self.sleep(2.0 * (attempt + 1))
+                        continue
                 detail = ""
                 try:
                     detail = (r.json().get("error") or {}).get("message", "")

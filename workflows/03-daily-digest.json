@@ -102,7 +102,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ ids: $('Build digest').first().json.ids }) }}"
+        "jsonBody": "={{ JSON.stringify({ ids: $('Build digest').first().json.ids, suggestion_ids: (($('Build digest').first().json.gmail || {}).suggestion_ids || []), login_alert: !!(($('Build digest').first().json.gmail || {}).login_alert) }) }}"
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,

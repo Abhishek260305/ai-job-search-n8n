@@ -2,12 +2,12 @@
 
 ## The one-minute version
 
-**n8n schedules; the Python service decides.** n8n runs six small workflows that call HTTP endpoints on a Python service. The service holds every rule (safety, filters, dedupe, scoring, tailoring, budget, Telegram) and talks to Postgres. Because the rules are ordinary tested Python and SQL, you can run them from the CLI, from Claude Code or from n8n and get the same answer.
+**n8n schedules; the Python service decides.** n8n runs seven small workflows that call HTTP endpoints on a Python service. The service holds every rule (safety, filters, dedupe, scoring, tailoring, budget, Telegram) and talks to Postgres. Because the rules are ordinary tested Python and SQL, you can run them from the CLI, from Claude Code or from n8n and get the same answer.
 
 ```mermaid
 flowchart TB
     subgraph host["Your server (docker compose)"]
-        n8n["n8n<br/>6 workflows"]
+        n8n["n8n<br/>7 workflows"]
         svc["scraper (Python service)<br/>safety · filters · dedupe · scoring · tailoring · budget · Telegram bot"]
         pg[("Postgres<br/>jobsearch + n8n databases")]
         gb["gotenberg<br/>HTML → PDF"]
@@ -35,7 +35,7 @@ flowchart TB
 
 | Component | Role | Reachable from outside? |
 |---|---|---|
-| **n8n** | Runs six workflows: a scheduler that starts the pipeline stages when the schedule settings say so, the stages themselves, and the Telegram poll; makes the scoring calls to Claude and sends the daily digest | `127.0.0.1:5678` only (use an SSH tunnel) |
+| **n8n** | Runs seven workflows: a scheduler that starts the pipeline stages when the schedule settings say so, the stages themselves (one of them, `06 Check mail`, belongs to the optional Gmail part and does nothing until it is on), and the Telegram poll; makes the scoring calls to Claude and sends the daily digest | `127.0.0.1:5678` only (use an SSH tunnel) |
 | **scraper** (Python/FastAPI, the folder is `scraper/`) | All the logic: source adapters (JobSpy, Apify, company job boards, remote feeds), safety, dedupe/ingest, free filters, scoring rules, tailoring, rendering, the Telegram bot, the budget guard | internal network only |
 | **PostgreSQL 16** | Two databases: `n8n` (n8n's own) and `jobsearch` (our data and many of our rules, as SQL functions) | internal network only |
 | **gotenberg** | Headless Chromium that turns the resume and cover-letter HTML into PDFs | internal network only |

@@ -8,16 +8,17 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 
-type Key = 'tailoring' | 'telegram' | 'digest'
+type Key = 'tailoring' | 'telegram' | 'digest' | 'gmail'
 
 const ROWS: { key: Key; label: string; help: string }[] = [
   { key: 'tailoring', label: 'Tailoring', help: 'Write a resume and cover letter for each shortlisted job. It costs about 5 cents per application, inside your budget caps. Off: the pipeline stops at scoring.' },
   { key: 'telegram', label: 'Telegram', help: 'Review applications and run commands from your phone. It also needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env.' },
   { key: 'digest', label: 'Digest', help: 'The message listing new matches (it needs Telegram). Its time is under Schedules.' },
+  { key: 'gmail', label: 'Email replies', help: 'Read replies to your applications (read-only) and suggest status changes you accept or dismiss on the Email page. Nothing changes without you. It needs the Google login: run scripts/jobsearch gmail login once. Off by default.' },
 ]
 
 /**
- * The three optional parts. A switch saves at once, except Telegram off while the approval mode is "review": with
+ * The optional parts. A switch saves at once, except Telegram off while the approval mode is "review": with
  * nobody to ask, "review" behaves as "auto" and applications are stored ready with no review step, so that asks first.
  */
 export default function FeaturesCard({ features }: { features: SettingsPage['features'] }) {

@@ -18,7 +18,7 @@ Pipeline stages used by the n8n workflows (database-backed; see pipeline.py):
   POST /jobs/ingest {jobs}           safety check + dedupe/upsert + free rule filters
   POST /jobs/prepare-batch {limit}   claim unscored jobs and return their scoring prompts
   POST /jobs/{id}/score {model_output}   validate the model reply, compute outcome, store it
-  GET  /digest?limit=N               ready-to-send shortlist message;  POST /digest/sent {ids}
+  GET  /digest?limit=N               ready-to-send shortlist message;  POST /digest/sent {ids, suggestion_ids, login_alert}
   GET  /budget  POST /budget/settings  POST /budget/usage   spend vs caps, change caps, log other paid usage
   GET  /profile  POST /profile       the search profile (terms, sources, company boards, filters), read and saved with the CLI's validation
   POST /boards/find                  which job board a company uses (read-only probes of the five boards' public APIs)
@@ -28,7 +28,9 @@ Pipeline stages used by the n8n workflows (database-backed; see pipeline.py):
                                      just done, a spending cap would be crossed ...);  GET /tailor/status?job_id=N   how it is going
   GET  /tailor/settings  POST /tailor/settings   mode, approval, score band, daily limit, model, cover letter
   POST /telegram/poll                process pending Telegram commands (/approve, /skip, /tailor, /status, ...)
-  GET  /features  POST /features    which optional parts are on (tailoring, telegram, digest) and what is configured
+  GET  /features  POST /features    which optional parts are on (tailoring, telegram, digest, gmail) and what is configured
+  GET  /mail/status  POST /mail/settings  POST /mail/run  POST /mail/check  POST /mail/rescan   the optional Gmail part: its state and settings; the scheduled stage
+                                     (login check, search, model step); a check of the saved Google login (reads no email)
   GET  /schedule  POST /schedule/{name}  POST /schedule/{name}/run  POST /schedule/timezone  POST /schedule/tick
                                      when each stage runs and how much it does; the scheduler workflow calls /tick
   GET  /applications  GET /applications/{id}  POST /applications/{id}/review {action, note}  GET /applications/{id}/files/{name}
@@ -51,13 +53,14 @@ from typing import Annotated, Optional
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from jobspy import scrape_jobs
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StrictBool, StrictInt, StringConstraints
 
 import apify_source
 import board_probe
 import boards
 import budget
 import features
+import mail
 import pipeline
 import profile_tools
 import tailor_service
@@ -370,6 +373,8 @@ class UsageRequest(BaseModel):
 
 class SentRequest(BaseModel):
     ids: list[int]
+    suggestion_ids: list[int] = []       # the Gmail suggestions the message told you about (step 6e)
+    login_alert: bool = False            # ... and whether it said the Google login stopped working
 
 
 @app.get("/pipeline/plan")
@@ -418,7 +423,11 @@ def digest(limit: Optional[int] = Query(None, ge=1, le=50)):
 
 @app.post("/digest/sent")
 def digest_sent(req: SentRequest):
-    return _db_call(lambda s: {"marked": s.mark_notified(req.ids)})
+    def run(s):
+        marked = s.mark_notified(req.ids)
+        mail_marked = s.gmail_digest_sent(req.suggestion_ids, req.login_alert) if (req.suggestion_ids or req.login_alert) else 0
+        return {"marked": marked, "mail_marked": mail_marked}
+    return _db_call(run)
 
 
 @app.get("/budget")
@@ -740,6 +749,7 @@ class FeaturesRequest(BaseModel):
     tailoring: Optional[bool] = None
     telegram: Optional[bool] = None
     digest: Optional[bool] = None
+    gmail: Optional[bool] = None
 
 
 def _features_report(s) -> dict:
@@ -761,6 +771,86 @@ def features_set(req: FeaturesRequest):
     def run(s):
         s.update_features(**{k: v for k, v in req.model_dump().items() if v is not None})
         return _features_report(s)
+    return _db_call(run)
+
+
+# ---------------------------------------------------------------- Gmail status tracking (Phase 6; docs/gmail.md)
+# The optional Gmail part. So far: its state, its two settings, and the scheduled stage (which reads no mailbox yet).
+
+class MailSettingsRequest(BaseModel):
+    lookback_days: Optional[StrictInt] = None        # strict: `true` must not become a 1-day lookback
+    from_now: Optional[StrictBool] = None
+
+
+def _mail_report(s) -> dict:
+    overview = s.gmail_overview()
+    eff = features.effective(s.features(), os.environ)["gmail"]
+    configured = features.gmail_configured(os.environ)
+    return {**overview, "enabled": eff["on"], "reason": eff["reason"], "configured": configured,
+            "lines": mail.describe(overview, eff, configured)}
+
+
+@app.get("/mail/status")
+def mail_status():
+    return _db_call(_mail_report)
+
+
+@app.post("/mail/settings")
+def mail_settings(req: MailSettingsRequest):
+    def run(s):
+        try:
+            clean = mail.validate_settings({k: v for k, v in req.model_dump().items() if v is not None})
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail={"errors": [str(e)]})
+        if not clean:
+            raise HTTPException(status_code=422, detail={"errors": ["nothing to change"]})
+        s.update_gmail_settings(**clean)
+        return _mail_report(s)
+    return _db_call(run)
+
+
+_mail_lock = threading.Lock()      # one mail run at a time: no double reading, and the model step's day count is never raced
+
+
+@app.post("/mail/run")
+def mail_run():
+    """The scheduled `mail` stage (workflow 06). A quiet no-op, with the reason, while the part is off. Otherwise: check the Google
+    login, search the mailbox, and ask the model about the emails the rules could not decide (docs/gmail.md). Counts only in the
+    answer. A second run while one is going is refused, not queued."""
+    def run(s):
+        eff = _features(s)["gmail"]
+        if not eff["on"]:
+            return mail.run_stage(eff, s, os.environ)
+        if not _mail_lock.acquire(blocking=False):
+            return {"skipped": "a mail run is already in progress", "checked": 0}
+        try:
+            row = s.schedule_row("mail")
+            return mail.run_stage(eff, s, os.environ, batch=row["batch"] or 20, model=row.get("model") or None)
+        finally:
+            _mail_lock.release()
+    return _db_call(run)
+
+
+@app.post("/mail/rescan")
+def mail_rescan():
+    """Search the first-search window again, and look again at the emails that were read but not acted on (noise, unmatched, unclear).
+    For mail that arrived before an application became something a reply could be about. Suggestions already made are untouched."""
+    def run(s):
+        reopened = s.gmail_rescan()
+        return {"reopened": reopened, **_mail_report(s)}
+    return _db_call(run)
+
+
+@app.post("/mail/check")
+def mail_check():
+    """Check the saved Google login now (one profile call; reads no email) and record the result. It works whether or not the
+    part is switched on, so the login can be tried before switching it on. It needs the three values in .env."""
+    def run(s):
+        if not features.gmail_configured(os.environ):
+            missing = [n for n in features.GMAIL_VARS if not (os.environ.get(n) or "").strip()]
+            raise HTTPException(status_code=409, detail={"errors": ["the Google login is not set up: " + ", ".join(missing) + " missing from .env (docs/gmail.md)"]})
+        result = mail.check(s, os.environ)
+        return {**result, **_mail_report(s)}
     return _db_call(run)
 
 
@@ -872,10 +962,10 @@ def schedule_get():
 @app.post("/schedule/tick")
 def schedule_tick():
     """Called by the scheduler workflow every few minutes: claim what is due and say what to start.
-    A stage whose feature is switched off (tailoring, digest) is left alone, so it fires promptly when switched back on."""
+    A stage whose feature is switched off (tailoring, digest, gmail) is left alone, so it fires promptly when switched back on."""
     def run(s):
         eff = _features(s)
-        skip = [n for n, feat in (("tailor", "tailoring"), ("digest", "digest")) if not eff[feat]["on"]]
+        skip = [n for n, feat in (("tailor", "tailoring"), ("digest", "digest"), ("mail", "gmail")) if not eff[feat]["on"]]
         return {"due": s.claim_due_schedules(skip), "skipped": skip}
     return _db_call(run)
 

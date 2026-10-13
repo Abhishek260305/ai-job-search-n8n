@@ -8,6 +8,7 @@ describes them back. Pure functions, no I/O.
   score    every N minutes   how many jobs per run, and which model
   tailor   every N minutes   how many applications per run
   digest   daily at HH:MM, or every N hours   how many matches in the message
+  mail     every N minutes   how many emails one run may open (the optional Gmail part; docs/gmail.md)
 """
 from __future__ import annotations
 
@@ -16,11 +17,11 @@ from datetime import datetime, timedelta
 from fractions import Fraction
 from typing import Optional
 
-NAMES = ("collect", "score", "tailor", "digest")
+NAMES = ("collect", "score", "tailor", "digest", "mail")
 DAILY = ("digest",)          # the only stage that may also run at a time of day
-MIN_EVERY = {"collect": 15, "score": 5, "tailor": 5, "digest": 60}      # collect is gentler on the job boards
+MIN_EVERY = {"collect": 15, "score": 5, "tailor": 5, "digest": 60, "mail": 15}      # collect and mail are gentler on the sites they call
 MAX_EVERY = 10080                                          # 7 days
-MAX_BATCH = {"collect": 50, "score": 50, "tailor": 10, "digest": 50}
+MAX_BATCH = {"collect": 50, "score": 50, "tailor": 10, "digest": 50, "mail": 50}
 MAX_BOARD_BATCH = 200                                      # collect only; matches the CHECK in migration 013
 
 _DURATION = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?|h|hr|hrs|hours?|d|days?)?\s*$", re.I)
@@ -76,7 +77,7 @@ def validate_update(name: str, fields: dict) -> dict:
             lo = MIN_EVERY[name]
             if not lo <= minutes <= MAX_EVERY:
                 raise ValueError(f"{name} can run every {format_minutes(lo)} to 7 days"
-                                 + (" (kept gentle on the job boards)" if name == "collect" else ""))
+                                 + (" (kept gentle on the job boards)" if name == "collect" else " (kept gentle on Gmail)" if name == "mail" else ""))
             out["every_minutes"] = minutes
             if name in DAILY:
                 out["at_time"] = None          # a schedule is an interval or a daily time, never both
@@ -125,7 +126,7 @@ def _when(ts: Optional[datetime], now: datetime) -> str:
 def describe(rows: list[dict], now: Optional[datetime] = None) -> list[str]:
     """One line per schedule: what it does, how often, how much, and when it last and next runs."""
     now = now or datetime.now().astimezone()
-    work = {"collect": "searches", "score": "jobs scored", "tailor": "applications", "digest": "matches listed"}
+    work = {"collect": "searches", "score": "jobs scored", "tailor": "applications", "digest": "matches listed", "mail": "emails opened"}
     lines = []
     for r in rows:
         every = f"daily at {str(r['at_time'])[:5]}" if r.get("at_time") is not None else f"every {format_minutes(r['every_minutes'])}"

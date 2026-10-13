@@ -295,6 +295,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Email Inbox */
+        get: operations["email_inbox_api_email_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/email/count": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Email Count */
+        get: operations["email_count_api_email_count_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/email/{suggestion_id}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Email Accept */
+        post: operations["email_accept_api_email__suggestion_id__accept_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/email/{suggestion_id}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Email Dismiss */
+        post: operations["email_dismiss_api_email__suggestion_id__dismiss_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/email/{suggestion_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Email Restore */
+        post: operations["email_restore_api_email__suggestion_id__restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/stats": {
         parameters: {
             query?: never;
@@ -532,7 +617,7 @@ export interface components {
              * Code
              * @enum {string}
              */
-            code: "paused" | "claude_blocked" | "claude_warn" | "apify_blocked" | "scoring_stalled" | "parked" | "sources_failing" | "schedule_overdue";
+            code: "paused" | "claude_blocked" | "claude_warn" | "apify_blocked" | "scoring_stalled" | "parked" | "sources_failing" | "schedule_overdue" | "gmail_login" | "gmail_stalled";
             /** Message */
             message: string;
         };
@@ -766,6 +851,156 @@ export interface components {
             /** Cost Usd */
             cost_usd: number;
         };
+        /**
+         * EmailAccept
+         * @description Accept one suggestion. `expected_status` is the job's status the page showed (`current_status`); a mismatch is a 409.
+         *     `acknowledged` says the person looked at the sender: required when the suggestion carries a trust flag or low confidence.
+         */
+        EmailAccept: {
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "new" | "filtered_out" | "scam_blocked" | "scored" | "shortlisted" | "tailored" | "drafted" | "approved" | "applied" | "in_progress" | "interview" | "offer" | "rejected" | "withdrawn" | "skipped" | "expired";
+            /**
+             * Acknowledged
+             * @default false
+             */
+            acknowledged: boolean;
+        };
+        /** EmailAccepted */
+        EmailAccepted: {
+            /** Id */
+            id: number;
+            /** Job Id */
+            job_id: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "approved" | "skipped" | "applied" | "in_progress" | "interview" | "offer" | "rejected" | "withdrawn";
+            /** Event Id */
+            event_id?: number | null;
+        };
+        /** EmailCount */
+        EmailCount: {
+            /** Enabled */
+            enabled: boolean;
+            /** Pending */
+            pending: number;
+        };
+        /** EmailCounts */
+        EmailCounts: {
+            /** Pending */
+            pending: number;
+            /** Accepted */
+            accepted: number;
+            /** Dismissed */
+            dismissed: number;
+        };
+        /** EmailDecided */
+        EmailDecided: {
+            /** Id */
+            id: number;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "dismissed";
+        };
+        /** EmailInbox */
+        EmailInbox: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Login
+             * @enum {string}
+             */
+            login: "none" | "ok" | "expired" | "error";
+            counts: components["schemas"]["EmailCounts"];
+            /** Items */
+            items: components["schemas"]["EmailItem"][];
+        };
+        /** EmailItem */
+        EmailItem: {
+            /** Id */
+            id: number;
+            /** Job Id */
+            job_id: number;
+            /** Company */
+            company: string | null;
+            /** Title */
+            title: string;
+            /**
+             * Job Status
+             * @enum {string}
+             */
+            job_status: "new" | "filtered_out" | "scam_blocked" | "scored" | "shortlisted" | "tailored" | "drafted" | "approved" | "applied" | "in_progress" | "interview" | "offer" | "rejected" | "withdrawn" | "skipped" | "expired";
+            /**
+             * Current Status
+             * @enum {string}
+             */
+            current_status: "new" | "filtered_out" | "scam_blocked" | "scored" | "shortlisted" | "tailored" | "drafted" | "approved" | "applied" | "in_progress" | "interview" | "offer" | "rejected" | "withdrawn" | "skipped" | "expired";
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
+            /** From Domain */
+            from_domain: string;
+            /** Subject */
+            subject: string;
+            /** Excerpt */
+            excerpt: string;
+            /**
+             * Signal
+             * @enum {string}
+             */
+            signal: "acknowledgement" | "assessment" | "interview" | "offer" | "rejection";
+            /**
+             * Proposed Status
+             * @enum {string}
+             */
+            proposed_status: "applied" | "interview" | "offer" | "rejected";
+            /** Status At Proposal */
+            status_at_proposal: string;
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low";
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "rules" | "model";
+            /** Flags */
+            flags: string[];
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "accepted" | "dismissed";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Decided At */
+            decided_at: string | null;
+            /** Event Id */
+            event_id: number | null;
+            /** Stale */
+            stale: boolean;
+            /** Needs Ack */
+            needs_ack: boolean;
+            /** Can Accept */
+            can_accept: boolean;
+            /** Can Undo */
+            can_undo: boolean;
+            /** Can Restore */
+            can_restore: boolean;
+        };
         /** ErrorBody */
         ErrorBody: {
             /** Detail */
@@ -781,6 +1016,11 @@ export interface components {
             telegram: boolean;
             /** Digest */
             digest: boolean;
+            /**
+             * Gmail
+             * @default false
+             */
+            gmail: boolean;
         };
         /** FeatureSettings */
         FeatureSettings: {
@@ -809,6 +1049,8 @@ export interface components {
             telegram?: boolean | null;
             /** Digest */
             digest?: boolean | null;
+            /** Gmail */
+            gmail?: boolean | null;
         };
         /** FindBoard */
         FindBoard: {
@@ -1213,7 +1455,7 @@ export interface components {
              * Requested
              * @enum {string}
              */
-            requested: "collect" | "score" | "tailor" | "digest";
+            requested: "collect" | "score" | "tailor" | "digest" | "mail";
             /** Note */
             note: string;
         };
@@ -1259,7 +1501,7 @@ export interface components {
              * Name
              * @enum {string}
              */
-            name: "collect" | "score" | "tailor" | "digest";
+            name: "collect" | "score" | "tailor" | "digest" | "mail";
             /** Enabled */
             enabled: boolean;
             /** Every Minutes */
@@ -2891,6 +3133,335 @@ export interface operations {
             };
         };
     };
+    email_inbox_api_email_get: {
+        parameters: {
+            query?: {
+                state?: "pending" | "accepted" | "dismissed";
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailInbox"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    email_count_api_email_count_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailCount"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    email_accept_api_email__suggestion_id__accept_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EmailAccept"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailAccepted"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    email_dismiss_api_email__suggestion_id__dismiss_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailDecided"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    email_restore_api_email__suggestion_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                suggestion_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmailDecided"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     stats_api_stats_get: {
         parameters: {
             query?: never;
@@ -3245,7 +3816,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                name: "collect" | "score" | "tailor" | "digest";
+                name: "collect" | "score" | "tailor" | "digest" | "mail";
             };
             cookie?: never;
         };
@@ -3316,7 +3887,7 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                name: "collect" | "score" | "tailor" | "digest";
+                name: "collect" | "score" | "tailor" | "digest" | "mail";
             };
             cookie?: never;
         };

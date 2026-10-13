@@ -3,7 +3,7 @@ import { toast } from 'sonner'
 import { api, ApiError, toQuery } from '@/api/client'
 import type {
   Board, TailorEstimate, TailorState, UndoResult, BudgetChange, JobEvent, Stats, Tracking, EditableStatus, FeaturesChange, Health, JobDetail, JobPage, JobsParams, Me, PauseState, PipelineStatus, RunRequested,
-  FindResult, ScheduleChange, ScheduleName, SearchPage, SearchProfileIn, SettingsPage, Spend, StatusResult, Summary, TailoringChange,
+  EmailAccepted, EmailCount, EmailDecided, EmailInbox, EmailState, FindResult, ScheduleChange, ScheduleName, SearchPage, SearchProfileIn, SettingsPage, Spend, StatusResult, Summary, TailoringChange,
 } from '@/api/types'
 import { statusLabel } from '@/lib/status'
 
@@ -23,6 +23,9 @@ export const keys = {
   tracking: (id: number) => ['tracking', id] as const,
   tailor: (id: number) => ['tailor', id] as const,
   tailorEstimate: (id: number) => ['tailor-estimate', id] as const,
+  email: (state: EmailState) => ['email', state] as const,
+  emailAll: ['email'] as const,
+  emailCount: ['email-count'] as const,
 }
 
 export function useMe() {
@@ -158,6 +161,8 @@ function useUndo() {
       client.invalidateQueries({ queryKey: keys.events(id) }),
       client.invalidateQueries({ queryKey: keys.board }),
       client.invalidateQueries({ queryKey: keys.stats }),
+      client.invalidateQueries({ queryKey: keys.emailAll }),         // a suggestion may have become stale, or an accepted one undone
+      client.invalidateQueries({ queryKey: keys.emailCount }),
     ])
   return {
     refreshAll,
@@ -420,3 +425,89 @@ export function useFindBoard() {
   return useMutation({ mutationFn: (name: string) => api<FindResult>('/api/search/boards/find', { method: 'POST', json: { name } }) })
 }
 
+// ---------------------------------------------------------------- version 6f: the email inbox
+
+/** Suggestions made from replies to your applications, in one state. The mail reader runs every 30 minutes, so every 2 minutes is plenty. */
+export function useEmailInbox(state: EmailState) {
+  return useQuery({
+    queryKey: keys.email(state),
+    queryFn: () => api<EmailInbox>(`/api/email?state=${state}&limit=100`),
+    refetchInterval: 2 * 60_000,
+  })
+}
+
+/** How many suggestions wait (the menu's badge), and whether the Gmail part is on. */
+export function useEmailCount() {
+  return useQuery({
+    queryKey: keys.emailCount,
+    queryFn: () => api<EmailCount>('/api/email/count'),
+    refetchInterval: 5 * 60_000,
+    retry: false,
+  })
+}
+
+export type AcceptEmailInput = { id: number; jobId: number; expected: PipelineStatus; acknowledged: boolean }
+
+/**
+ * Accepts one suggestion: the job is marked with the status the email proposed, through the same function as a click on the board, so
+ * it is in the history and can be undone for a while (the Undo is tied to the history entry this wrote). A refusal (the job changed,
+ * the suggestion was decided in another tab) reloads the lists and says why.
+ */
+export function useAcceptEmail() {
+  const { refreshAll, undo } = useUndo()
+  return useMutation({
+    mutationFn: ({ id, expected, acknowledged }: AcceptEmailInput) =>
+      api<EmailAccepted>(`/api/email/${id}/accept`, { method: 'POST', json: { expected_status: expected, acknowledged } }),
+    onSuccess: async (result) => {
+      await refreshAll(result.job_id)
+      const message = `Marked ${statusLabel(result.status)}`
+      if (result.event_id == null) {
+        toast.success(message)
+        return
+      }
+      const entry = result.event_id
+      let pressed = false
+      const toastId = toast.success(message, {
+        duration: UNDO_WINDOW_MS,
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            if (pressed) return
+            pressed = true
+            toast.dismiss(toastId)
+            undo.mutate({ id: result.job_id, expected: result.status, eventId: entry })
+          },
+        },
+      })
+    },
+    onError: async (error, { jobId }) => {
+      if (error instanceof ApiError && error.status === 409) {
+        await refreshAll(jobId)
+        const now = error.currentStatus ? ` It is ${statusLabel(error.currentStatus)} now.` : ''
+        toast.warning(`${error.detail}${now} Reloaded.`)
+      } else if (!(error instanceof ApiError && error.status === 401)) {
+        toast.error(error instanceof ApiError ? error.detail : 'The suggestion could not be accepted.')
+      }
+    },
+  })
+}
+
+/** Dismiss a suggestion, or bring a dismissed one back. */
+export function useDecideEmail(action: 'dismiss' | 'restore') {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => api<EmailDecided>(`/api/email/${id}/${action}`, { method: 'POST' }),
+    onSuccess: async () => {
+      await Promise.all([client.invalidateQueries({ queryKey: keys.emailAll }), client.invalidateQueries({ queryKey: keys.emailCount })])
+      toast.success(action === 'dismiss' ? 'Dismissed' : 'Brought back')
+    },
+    onError: async (error) => {
+      if (error instanceof ApiError && error.status === 409) {
+        await Promise.all([client.invalidateQueries({ queryKey: keys.emailAll }), client.invalidateQueries({ queryKey: keys.emailCount })])
+        toast.warning(`${error.detail} Reloaded.`)
+      } else if (!(error instanceof ApiError && error.status === 401)) {
+        toast.error(error instanceof ApiError ? error.detail : 'The suggestion could not be changed.')
+      }
+    },
+  })
+}

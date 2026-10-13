@@ -35,7 +35,7 @@ def test_the_estimate_is_passed_on_as_the_scraper_gave_it(client, scraper):
 
 def test_a_refused_estimate_carries_the_reason(client, scraper, monkeypatch):
     monkeypatch.setitem(TAILOR_ESTIMATE, "can_run", False)
-    monkeypatch.setitem(TAILOR_ESTIMATE, "reason", "tailoring is switched off (jobsearch features set tailoring on)")
+    monkeypatch.setitem(TAILOR_ESTIMATE, "reason", "tailoring is switched off (jobsearch features set --tailoring on)")
     body = client.get("/api/jobs/4/tailor/estimate").json()
     assert body["can_run"] is False and "switched off" in body["reason"]
 

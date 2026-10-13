@@ -16,7 +16,11 @@ Commands:
   mark N STAGE            set any stage by hand: interview, offer, rejected, ... (no Gmail needed)
   jobs, job N, export     browse the shortlist, one job in detail, or a CSV for a spreadsheet
   files N                 where the PDFs for job N are, and how to copy them
-  features [set]          switch the optional parts on or off: tailoring, telegram, digest
+  features [set]          switch the optional parts on or off: tailoring, telegram, digest, gmail
+  gmail [status|login|check|lookback|rescan|run]   the optional Gmail part: its state; `gmail login` is the one-time Google sign-in
+                          (read-only; saves the login in .env without showing it); `gmail check` tests the saved login;
+                          `gmail lookback 30|from-now` sets how the first search starts; `gmail rescan` searches that window again
+                          (for mail from before an application could get a reply); `gmail run` asks for a run
   schedule [set|run|timezone|pause|resume]   when each stage runs and how much it does; pause/resume is the emergency brake
                           `schedule set collect --boards N` = how many company boards and feeds one collect run visits
   sources [show|on|off|only] [NAMES...]   which job sources are used: `sources off boards`, `sources only apify`,
@@ -59,6 +63,8 @@ sys.path.insert(0, str(REPO / "scraper"))
 
 import profile_tools  # noqa: E402
 import safety  # noqa: E402
+import gmail_login  # noqa: E402
+import mail  # noqa: E402
 import schedules  # noqa: E402
 import scoring  # noqa: E402
 import sources  # noqa: E402
@@ -138,6 +144,21 @@ class Stack:
         except subprocess.TimeoutExpired:
             raise StackError("command timed out")
         self._ok(r)
+
+    def run_repo_script(self, args: list[str], input_text: Optional[str] = None, timeout: int = 60):
+        """Run `sh scripts/NAME ...` in the repository on the machine that runs the stack (over SSH when JOBSEARCH_SSH is set).
+        `args` are fixed script names and option words, never user input; anything secret goes in `input_text`, which is sent on
+        standard input, so it is never part of a command line (ps, shell history, the SSH command)."""
+        if self.ssh:
+            cmd, cwd = self.ssh + [f"cd {self.remote_dir} && sh {shlex.join(args)}"], None
+        else:
+            cmd, cwd = ["sh"] + args, self.repo
+        try:
+            return subprocess.run(cmd, input=input_text, capture_output=True, text=True, timeout=timeout, cwd=cwd)
+        except FileNotFoundError as e:
+            raise StackError(f"cannot run '{cmd[0]}': {e}")
+        except subprocess.TimeoutExpired:
+            raise StackError("command timed out")
 
     def psql(self, sql: str, db: str = "jobsearch") -> str:
         cmd = f'psql -v ON_ERROR_STOP=1 -X -q -At -U "$POSTGRES_USER" -d {db}'
@@ -316,6 +337,8 @@ def run_doctor(stack, repo: Path = REPO) -> list[Check]:
             tailoring_on = body["effective"]["tailoring"]["on"]
             parts = [f"{n} " + ("on" if e["on"] else "off") for n, e in body["effective"].items()]
             checks.append(Check("optional parts", "ok", ", ".join(parts) + " (scoring is always on; change with `features set`)"))
+            if body["flags"].get("gmail"):
+                checks.append(_gmail_check(stack))
     except (StackError, KeyError, TypeError):
         pass
 
@@ -705,7 +728,7 @@ def run_tailor_settings(stack) -> str:
 
 # ---------------------------------------------------------------- optional parts, browsing, manual stages
 
-FEATURE_NAMES = ("tailoring", "telegram", "digest")
+FEATURE_NAMES = ("tailoring", "telegram", "digest", "gmail")
 JOB_STATUSES = ("new", "filtered_out", "scam_blocked", "scored", "shortlisted", "tailored", "approved", "applied", "skipped", "expired")
 MARK_STAGES = ("approved", "skipped", "applied", "in_progress", "interview", "offer", "rejected", "withdrawn")
 
@@ -719,6 +742,82 @@ def run_features(stack, changes: Optional[dict] = None) -> str:
     if st != 200:
         raise CheckError(_errors(body))
     return "\n".join(body["lines"])
+
+
+def run_gmail(stack, action: str = "status", value: Optional[str] = None, **opts) -> str:
+    """The optional Gmail part. `status` shows it; `login` is the one-time Google sign-in; `check` tests the saved login;
+    `lookback 30` or `lookback from-now` sets how the FIRST search starts; `run` asks for a run at the next scheduler tick
+    (refused, with the reason, while the part is not in effect)."""
+    if action == "login":
+        try:
+            return gmail_login.run_login(stack, **opts)
+        except gmail_login.LoginError as e:
+            raise CheckError(str(e))
+    if action == "rescan":
+        st, body = _service_call(stack, "POST", "/mail/rescan")
+        if st != 200:
+            raise CheckError(_errors(body))
+        return (f"The next search covers the whole first-search window again ({body['lookback_days']} days), and {body['reopened']} email(s) that were read "
+                "but not acted on will be looked at again. Suggestions already made are untouched.\n\n" + "\n".join(body["lines"]))
+    if action == "check":
+        st, body = _service_call(stack, "POST", "/mail/check")
+        if st != 200:
+            raise CheckError(_errors(body))
+        head = {"ok": f"login: works. Signed in as {body.get('account') or '(unknown)'}.",
+                "expired": f"login: EXPIRED or revoked: {body['message']}",
+                "error": f"login: the check failed: {body['message']}"}.get(body["status"], f"login: {body['status']}: {body['message']}")
+        return "\n".join([head, ""] + body["lines"])
+    if action == "lookback":
+        if value is None:
+            raise ValueError("give a number of days (1 to 365) or from-now, for example: gmail lookback 30")
+        if value.lower() in ("from-now", "from_now", "now"):
+            changes = {"from_now": True}
+        elif re.fullmatch(r"[0-9]{1,4}", value):
+            changes = {"lookback_days": int(value), "from_now": False}
+        else:
+            raise ValueError("lookback is a number of days (1 to 365) or from-now")
+        mail.validate_settings(changes)
+        st, body = _service_call(stack, "POST", "/mail/settings", changes)
+        note = ("\nnote: the first search has already happened, so this changes nothing now: later searches continue from where the last one stopped."
+                if st == 200 and body.get("search_cursor") else "")
+    elif action == "run":
+        st, body = _service_call(stack, "GET", "/mail/status")
+        if st == 200 and not body["enabled"]:
+            raise CheckError(f"Gmail is not in effect: {body['reason']}")
+        if st == 200:
+            st, body = _service_call(stack, "POST", "/schedule/mail/run")
+            if st == 200:
+                return "mail: run requested. It starts at the next scheduler tick (within 5 minutes)."
+        note = ""
+    else:
+        st, body = _service_call(stack, "GET", "/mail/status")
+        note = ""
+    if st != 200:
+        raise CheckError(_errors(body))
+    return "\n".join(body["lines"]) + note
+
+
+def _gmail_check(stack) -> "Check":
+    """The doctor's line for the optional Gmail part. Only asked for when the switch is on."""
+    st, body = _service_call(stack, "GET", "/mail/status")
+    if st != 200:
+        return Check("gmail", "warn", _errors(body))
+    if not body["enabled"]:
+        return Check("gmail", "warn", f"switched on but not in effect: {body['reason']}")
+    if body["token_status"] == "expired":
+        return Check("gmail", "warn", "the Google login expired or was revoked: sign in again with scripts/jobsearch gmail login")
+    if body["token_status"] == "error":
+        return Check("gmail", "warn", f"the last mailbox check failed: {body.get('last_error') or 'unknown error'}")
+    early = body.get("early_stops") or 0
+    if early >= 3:
+        summary = body.get("last_summary") or {}
+        why = summary.get("stopped") or next((summary[p]["stopped"] for p in ("search", "classify") if isinstance(summary.get(p), dict) and summary[p].get("stopped")), "")
+        return Check("gmail", "warn", f"the last {early} mailbox runs ended early" + (f" ({why})" if why else "") + ": check `scripts/jobsearch gmail` and the scraper's log")
+    waiting = body["pending"]
+    unclear = body.get("unclear") or {}
+    parked = f"; {unclear['parked']} email{'s' if unclear['parked'] != 1 else ''} parked (the model could not read them: `gmail rescan` reopens them)" if unclear.get("parked") else ""
+    ran = "" if not body.get("last_run_at") else "; last run " + body["last_run_at"][:16].replace("T", " ") + " UTC"
+    return Check("gmail", "ok", f"on; {waiting} suggestion{'s' if waiting != 1 else ''} waiting for you, {body['messages_seen']} emails looked at{ran}{parked}")
 
 
 def _lit(text: str) -> str:
@@ -1502,10 +1601,16 @@ def build_parser() -> argparse.ArgumentParser:
     _job_filters(ex, 1000)
     ex.add_argument("-o", "--output", help="file to write (default: print)")
 
-    ft = sub.add_parser("features", help="show or change which optional parts are on (tailoring, telegram, digest)")
+    ft = sub.add_parser("features", help="show or change which optional parts are on (tailoring, telegram, digest, gmail)")
     ft.add_argument("action", nargs="?", choices=["show", "set"], default="show")
     for name in FEATURE_NAMES:
         ft.add_argument(f"--{name}", choices=["on", "off"])
+
+    gm = sub.add_parser("gmail", help="the optional Gmail part: state, how far back the first search looks, run now")
+    gm.add_argument("action", nargs="?", choices=["status", "login", "check", "lookback", "rescan", "run"], default="status")
+    gm.add_argument("value", nargs="?", help="for lookback: a number of days (1 to 365), or from-now")
+    gm.add_argument("--no-browser", action="store_true", help="login: only print the link, do not try to open a browser")
+    gm.add_argument("--restart", action="store_true", help="login: restart the scraper afterwards so it sees the saved login")
 
     sub.add_parser("parked", help="jobs that ran out of attempts (skipped until requeued)")
     rq = sub.add_parser("requeue", help="put parked jobs back in the queue")
@@ -1521,10 +1626,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     sc = sub.add_parser("schedule", help="when each stage runs and how much it does")
     sc.add_argument("action", nargs="?", choices=["show", "set", "run", "timezone", "pause", "resume"], default="show")
-    sc.add_argument("target", nargs="?", help="collect|score|tailor|digest (for set and run), or a timezone name")
+    sc.add_argument("target", nargs="?", help="collect|score|tailor|digest|mail (for set and run), or a timezone name")
     sc.add_argument("--every", help="how often, for example 30m, 6h or 1d (collect, score, tailor)")
     sc.add_argument("--at", help="time of day, 24-hour HH:MM (digest)")
-    sc.add_argument("--batch", type=int, help="how much one run does (searches, jobs, applications or matches)")
+    sc.add_argument("--batch", type=int, help="how much one run does (searches, jobs, applications, matches or emails)")
     sc.add_argument("--boards", type=int, help="company boards and feeds one collect run visits, 1 to 200 (collect only)")
     sc.add_argument("--model", help="the scoring model (score only)")
     sc.add_argument("--reason", help="why you are pausing (shown while paused)")
@@ -1679,8 +1784,14 @@ def main(argv=None, stack=None, stdin=None) -> int:
         if args.cmd == "features":
             changes = {n: getattr(args, n) == "on" for n in FEATURE_NAMES if getattr(args, n) is not None}
             if args.action == "set" and not changes:
-                raise ValueError("give at least one of --tailoring, --telegram, --digest (on or off)")
+                raise ValueError("give at least one of --tailoring, --telegram, --digest, --gmail (on or off)")
             print(run_features(stack, changes if args.action == "set" else None))
+            return 0
+        if args.cmd == "gmail":
+            opts = {"no_browser": args.no_browser, "restart": args.restart} if args.action == "login" else {}
+            if args.action != "login" and (args.no_browser or args.restart):
+                raise ValueError("--no-browser and --restart belong to gmail login")
+            print(run_gmail(stack, args.action, args.value, **opts))
             return 0
         if args.cmd == "tailor-settings":
             if args.action == "set":

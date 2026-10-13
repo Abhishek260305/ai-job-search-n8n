@@ -147,6 +147,22 @@ STATS = {
 }
 
 
+def email_item(item_id: int = 1, **overrides) -> dict:
+    """One item of dashboard_email_inbox() (migration 025)."""
+    row = {"id": item_id, "job_id": 3, "company": "Company 3", "title": "Engineer 3", "job_status": "applied", "current_status": "applied",
+           "received_at": NOW, "from_domain": "company3.com", "subject": "Interview invitation", "excerpt": "We would like to schedule a call.",
+           "signal": "interview", "proposed_status": "interview", "status_at_proposal": "applied", "confidence": "medium", "source": "rules",
+           "flags": [], "state": "pending", "created_at": NOW, "decided_at": None, "event_id": None, "sort_at": NOW,
+           "stale": False, "needs_ack": False, "can_accept": True, "can_undo": False, "can_restore": False}
+    row.update(overrides)
+    return row
+
+
+EMAIL_INBOX = {"enabled": True, "login": "ok", "counts": {"pending": 2, "accepted": 1, "dismissed": 0},
+               "items": [email_item(1), email_item(2, job_id=4, signal="rejection", proposed_status="rejected", confidence="low", flags=["phishing_risk"],
+                                                   needs_ack=True, source="model")]}
+
+
 class FakeStore:
     """Answers like PgStore from fixed data. Set `fail` to an exception to make the next data call raise it;
     every call is recorded in `calls`."""
@@ -237,6 +253,26 @@ class FakeStore:
         self._call("stats")
         return STATS
 
+    def email_inbox(self, state, limit):
+        self._call("email_inbox", state, limit)
+        return EMAIL_INBOX | {"items": [i for i in EMAIL_INBOX["items"] if state == "pending"]}
+
+    def email_count(self):
+        self._call("email_count")
+        return {"enabled": True, "pending": 2}
+
+    def email_accept(self, suggestion_id, expected, acknowledged):
+        self._call("email_accept", suggestion_id, expected, acknowledged)
+        return {"id": suggestion_id, "job_id": 3, "status": "interview", "event_id": self.event_id}
+
+    def email_dismiss(self, suggestion_id):
+        self._call("email_dismiss", suggestion_id)
+        return {"id": suggestion_id, "state": "dismissed"}
+
+    def email_restore(self, suggestion_id):
+        self._call("email_restore", suggestion_id)
+        return {"id": suggestion_id, "state": "pending"}
+
     def set_pause(self, paused, reason):
         self._call("set_pause", paused, reason)
         return {"paused": paused, "paused_at": NOW if paused else None, "reason": reason if paused else None}
@@ -252,13 +288,15 @@ def scraper_schedule() -> dict:
         row("collect", 360, None, 18, extra={"board_batch": 35}),
         row("score", 30, None, 25, "claude-haiku-5-5"),
         row("tailor", 15, None, 3),
-        row("digest", None, "08:00:00", 10)]}
+        row("digest", None, "08:00:00", 10),
+        row("mail", 30, None, 20)]}
 
 
 SCRAPER_FEATURES = {
-    "flags": {"tailoring": False, "telegram": True, "digest": True},
-    "effective": {"tailoring": {"on": False, "reason": "switched off (jobsearch features set tailoring on)"},
-                  "telegram": {"on": True, "reason": ""}, "digest": {"on": True, "reason": ""}},
+    "flags": {"tailoring": False, "telegram": True, "digest": True, "gmail": False},
+    "effective": {"tailoring": {"on": False, "reason": "switched off (jobsearch features set --tailoring on)"},
+                  "telegram": {"on": True, "reason": ""}, "digest": {"on": True, "reason": ""},
+                  "gmail": {"on": False, "reason": "switched off (jobsearch features set --gmail on)"}},
     "approval": "review", "approval_effective": "review", "lines": ["ignored"],
 }
 SCRAPER_TAILORING = {"mode": "auto", "min_score": None, "max_score": 80, "daily_limit": 5, "approval": "review",

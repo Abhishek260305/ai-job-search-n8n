@@ -20,6 +20,10 @@ Routes (see auth.py for how login works):
   GET/PUT /api/jobs/{id}/tracking   notes, contact, referral and follow-up date of a job; a save needs the version it read (409 if changed)
   PUT  /api/follow-ups/days   after how many days with no reply an application is due for a follow-up
   GET  /api/board         the Kanban board: the cards of every column, the true totals and what is due for a follow-up
+  GET  /api/email?state=pending|accepted|dismissed   the email inbox: suggestions from replies to your applications (Gmail part)
+  GET  /api/email/count   how many wait, and whether the Gmail part is on
+  POST /api/email/{id}/accept {expected_status, acknowledged?}   make the change (the same function as a board move: history, Undo)
+  POST /api/email/{id}/dismiss  /restore   close a suggestion, or bring a dismissed one back
   GET  /api/stats         response rate, days to a first reply and the last 12 weeks
   PATCH /api/jobs/{id}/status   {status, expected_status, note?}; 409 with current_status if it changed elsewhere; the answer
                           names the history entry it wrote (event_id), which is what Undo is tied to
@@ -60,11 +64,12 @@ import settings_service
 from models import (BudgetChange, ErrorBody, FeaturesChange, FindBoard, FindResult, Health, JobDetail, JobPage, JobsQuery, PauseRequest, PauseState,
                     RunRequested, ScheduleChange, ScheduleName, SearchPage, SearchSave, SettingsPage, Spend, StatusChange,
                     StatusResult, Summary, TailoringChange)
+from models import (EmailAccept, EmailAccepted, EmailCount, EmailDecided, EmailInbox, EmailQuery)
 from models import (Board, FollowUpDays, JobEvent, Stats, TailorEstimate, TailorStart, TailorState, Tracking, TrackingSave, UndoRequest,
                     UndoResult)
 from scraper_client import ScraperClient
 from settings import Settings, SettingsError, load_settings
-from store import Conflict, Forbidden, Invalid, NotFound, HistoryChanged, PgStore, ProfileChanged, StoreError, TrackingChanged, Unavailable
+from store import Conflict, EmailChanged, EmailNotFound, Forbidden, Invalid, NotFound, HistoryChanged, PgStore, ProfileChanged, StoreError, TrackingChanged, Unavailable
 
 PUBLIC_API = frozenset({"/api/health", "/api/openapi.json", "/api/login", "/api/logout"})
 SECURITY_HEADERS = {
@@ -80,9 +85,10 @@ SECURITY_HEADERS = {
 ASSET_CACHE = "public, max-age=31536000, immutable"   # Vite puts a content hash in every asset name
 
 JobId = Annotated[int, Path(ge=1, le=2**63 - 1)]       # a bigint; anything larger would be a database error
+EmailId = Annotated[int, Path(ge=1, le=2**63 - 1)]
 # 422 keeps FastAPI's schema (a list of field errors); the database's own 422 has a plain detail string.
 ERRORS = {code: {"model": ErrorBody} for code in (403, 404, 409, 503)}
-STORE_ERRORS = {NotFound: 404, Forbidden: 403, Invalid: 422, Conflict: 409, ProfileChanged: 409, TrackingChanged: 409, HistoryChanged: 409, Unavailable: 503}
+STORE_ERRORS = {NotFound: 404, EmailNotFound: 404, EmailChanged: 409, Forbidden: 403, Invalid: 422, Conflict: 409, ProfileChanged: 409, TrackingChanged: 409, HistoryChanged: 409, Unavailable: 503}
 
 
 def host_without_port(host: str) -> str:
@@ -138,7 +144,11 @@ def create_app(settings: Settings, store, sessions: Sessions | None = None,
     async def store_error(request: Request, e: StoreError):
         status = STORE_ERRORS.get(type(e), 500)
         body = ErrorBody(detail=str(e) or "error")
-        if isinstance(e, NotFound):
+        if isinstance(e, EmailNotFound):
+            body.detail = "suggestion not found"
+        elif isinstance(e, EmailChanged):
+            body.detail = (str(e) or "This suggestion changed.").strip().capitalize() + "."
+        elif isinstance(e, NotFound):
             body.detail = "job not found"
         elif isinstance(e, Conflict):
             body = ErrorBody(detail="the status was changed elsewhere; reload to see it", current_status=e.current)
@@ -260,6 +270,28 @@ def create_app(settings: Settings, store, sessions: Sessions | None = None,
     @protected.put("/follow-ups/days", response_model=FollowUpDays, responses=ERRORS)
     def follow_up_days(body: FollowUpDays):
         return FollowUpDays(days=store.set_follow_up_days(body.days))
+
+    # ---- version 6f: the email inbox. Reading and deciding go through the database's own functions (migration 025); accepting is
+    # the same function as a click on the board, so it is in the history and Undo works.
+    @protected.get("/email", response_model=EmailInbox, responses=ERRORS)
+    def email_inbox(q: Annotated[EmailQuery, Query()]):
+        return store.email_inbox(q.state, q.limit)
+
+    @protected.get("/email/count", response_model=EmailCount, responses=ERRORS)
+    def email_count():
+        return store.email_count()
+
+    @protected.post("/email/{suggestion_id}/accept", response_model=EmailAccepted, responses=ERRORS)
+    def email_accept(suggestion_id: EmailId, body: EmailAccept):
+        return store.email_accept(suggestion_id, body.expected_status, body.acknowledged)
+
+    @protected.post("/email/{suggestion_id}/dismiss", response_model=EmailDecided, responses=ERRORS)
+    def email_dismiss(suggestion_id: EmailId):
+        return store.email_dismiss(suggestion_id)
+
+    @protected.post("/email/{suggestion_id}/restore", response_model=EmailDecided, responses=ERRORS)
+    def email_restore(suggestion_id: EmailId):
+        return store.email_restore(suggestion_id)
 
     @protected.get("/stats", response_model=Stats, responses=ERRORS)
     def stats():

@@ -3,8 +3,12 @@ import type { DailySpend, ScheduleRow, Spend } from '@/api/types'
 import { DASH } from '@/lib/format'
 
 const STAGES: Record<string, string> = {
-  collect: 'Collect jobs', score: 'Score jobs', tailor: 'Tailor applications', digest: 'Send the digest',
+  collect: 'Collect jobs', score: 'Score jobs', tailor: 'Tailor applications', digest: 'Send the digest', mail: 'Check mail',
 }
+
+// The `mail` stage belongs to the optional Gmail part. It exists in the database and the scheduler from Phase 6 step 6a, but
+// there is nothing to show or to set until the mailbox reader exists, so the pages do not list it yet. Step 6f (the email
+// inbox, with the Gmail switch) removes this filter.
 
 export function stageLabel(name: string): string {
   return STAGES[name] ?? name.replace(/_/g, ' ')
