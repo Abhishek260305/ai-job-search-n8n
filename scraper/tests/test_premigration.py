@@ -351,3 +351,55 @@ def test_the_digest_marks_nothing_it_was_not_given(monkeypatch, conns):
     db.PgStore("").gmail_digest_sent([], False)
     sent = [s for c in conns.opened for s in c.statements if "gmail_digest_sent" in s]
     assert len(sent) == 1
+
+
+# ---- migration 026 (tailoring v2): an image that runs before it is applied reads v1 settings and no company notes
+
+OLD_TAILOR = {"mode": "auto", "min_score": None, "max_score": None, "daily_limit": None, "approval": "review", "model": "claude-sonnet-5-5",
+              "cover_letter": True, "max_pages": 1, "verify": True, "verify_model": "claude-haiku-5-5", "paper": "a4", "style_notes": None}
+
+
+def test_tailor_settings_of_an_old_database_say_engine_v1_and_the_defaults(conns, monkeypatch):
+    conns.fail_on = ("engine, gap_policy", psycopg.errors.UndefinedColumn('column "engine" does not exist'))
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: dict(OLD_TAILOR))
+    s = db.PgStore("").tailor_settings()
+    assert s["engine"] == "v1" and s["gap_policy"] == "omit" and s["cover_style"] == "evidence" and s["tone"] == "direct"
+    assert s["reviewer"] is True and s["reviewer_model"] == "claude-haiku-5-5" and s["company_research"] is True and s["mode"] == "auto"
+    assert conns.opened[0].exit_exc is psycopg.errors.UndefinedColumn and conns.opened[0].closed        # the failed attempt was rolled back
+
+
+def test_tailor_settings_of_a_migrated_database_are_read_in_one_go(conns, monkeypatch):
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: dict(OLD_TAILOR, engine="v2", gap_policy="bridge"))
+    s = db.PgStore("").tailor_settings()
+    assert s["engine"] == "v2" and s["gap_policy"] == "bridge" and len(conns.opened) == 1
+
+
+def test_changing_an_old_setting_does_not_need_the_new_columns_but_changing_the_engine_says_to_migrate(conns, monkeypatch):
+    monkeypatch.setattr(FakeCursor, "fetchone", lambda self: dict(OLD_TAILOR))
+    db.PgStore("").update_tailor_settings(mode="manual")
+    writes = [s for c in conns.opened for s in c.statements if s.startswith("UPDATE tailor_settings")]
+    assert len(writes) == 1 and "engine" not in writes[0]
+    conns.fail_on = ("UPDATE tailor_settings SET engine", psycopg.errors.UndefinedColumn('column "engine" does not exist'))
+    with pytest.raises(LookupError, match="run scripts/jobsearch migrate"):
+        db.PgStore("").update_tailor_settings(engine="v2")
+
+
+def test_company_notes_before_the_migration_are_nothing_and_saving_them_is_a_quiet_no_op(conns):
+    conns.fail_on = ("company_notes", psycopg.errors.UndefinedTable('relation "company_notes" does not exist'))
+    store = db.PgStore("")
+    assert store.company_notes_get("acme", 30) is None
+    store.company_notes_save("acme", ["a fact"], "https://acme.com/")                     # must not raise
+
+
+def test_company_notes_are_cut_to_three_facts_and_a_short_source(conns, monkeypatch):
+    seen = []
+    monkeypatch.setattr(FakeCursor, "execute", lambda self, sql, params=None: seen.append((sql, params)))
+    db.PgStore("").company_notes_save("acme", ["a", "b", "c", "d"], "https://acme.com/" + "x" * 400)
+    sql, params = seen[0]
+    assert "ON CONFLICT (company_key) DO UPDATE" in sql and params[0] == "acme" and len(params[2]) == 300
+    assert len(params[1].obj) == 3
+
+
+def test_the_links_of_a_job_are_its_own_source_and_apply_links_only(conns, monkeypatch):
+    monkeypatch.setattr(FakeCursor, "fetchall", lambda self: [{"url": "https://a.com/1", "apply_url": "https://a.com/apply"}, {"url": "https://b.com/2", "apply_url": None}], raising=False)
+    assert db.PgStore("").job_links(7) == ["https://a.com/1", "https://a.com/apply", "https://b.com/2"]

@@ -13,7 +13,8 @@ from tests.test_tailor import GOOD_PATCH, JOB, PROFILE, RESUME
 JOB_ROW = dict(JOB, id=24, score=75, verdict="good", location="Pune", canonical_url="https://globex.com/jobs/1",
                strengths=["Go match"], gaps=["no Kafka"])
 SETTINGS = {"mode": "auto", "min_score": None, "max_score": None, "daily_limit": None, "approval": "review",
-            "model": "claude-sonnet-5-5", "cover_letter": True, "max_pages": 1, "verify": False, "verify_model": "claude-haiku-5-5"}
+            "model": "claude-sonnet-5-5", "cover_letter": True, "max_pages": 1, "verify": False, "verify_model": "claude-haiku-5-5",
+            "reviewer": False, "company_research": False}       # v2's extra calls are switched on by the tests that are about them
 PRICING = {"input_per_mtok": 2, "output_per_mtok": 10, "cache_write_per_mtok": 2.5, "cache_read_per_mtok": 0.1}
 OPEN_BUDGET = {"month_spent": 0, "day_spent": 0, "monthly_cap": 10, "daily_cap": 1.5, "month_remaining": 10,
                "day_remaining": 1.5, "warn": False, "blocked": False, "blocked_reason": None}
@@ -572,3 +573,546 @@ def test_an_old_cover_letter_is_removed_when_this_run_has_none(tmp_path):
     service(tmp_path, ai=ScriptedAI(p)).run_job(JOB_ROW, dict(SETTINGS, cover_letter=False))
     assert not (d / "cover_letter.pdf").exists(), "a stale letter would be sent by /send"
     assert (d / "resume.pdf").exists()
+
+
+# ------------------------------------------------------------------ comparing engines (plan T0) and the gap policy (plan T1)
+
+FILES = {"resume.pdf", "cover_letter.pdf", "tailored_resume.json", "patch.json", "audit.json", "posting.txt", "summary.md"}
+CONFESSION = ("I would bring strong backend ownership. I should be upfront that I have about a year of professional experience and have not yet "
+              "built evaluation harnesses. I want to grow into that work with your team.")
+
+
+def hedged_patch():
+    p = patch()
+    p["cover_letter"] = dict(p["cover_letter"], paragraphs=[p["cover_letter"]["paragraphs"][0], p["cover_letter"]["paragraphs"][1], CONFESSION])
+    return p
+
+
+def test_a_comparison_writes_only_under_compare_and_saves_nothing(tmp_path):
+    store, ai = FakeStore(), ScriptedAI(patch(), patch())
+    out = service(tmp_path, store, ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    assert store.saved == [] and store.failures == [] and store.released == [] and store.claims == []
+    root = tmp_path / "compare" / "24-globex-senior-backend-engineer"
+    assert {p.name for p in root.iterdir()} == {"v1", "v2", "compare.md"} and not (tmp_path / "applications").exists()
+    for e in ("v1", "v2"):
+        assert {p.name for p in (root / e).iterdir()} == FILES
+    assert out["folder"] == str(root) and out["compare_md"] == str(root / "compare.md")
+    assert {e: r["status"] for e, r in out["runs"].items()} == {"v1": "compared", "v2": "compared"}
+    assert all("patch" not in r and "requirement_list" not in r for r in out["runs"].values())      # the reply stays small
+    assert out["cost_usd"] == pytest.approx(0.0246)
+
+
+def test_a_comparison_is_logged_under_its_own_purpose_so_it_is_never_mistaken_for_real_tailoring(tmp_path):
+    store = FakeStore()
+    service(tmp_path, store, ScriptedAI(patch(), patch())).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    assert [u["purpose"] for u in store.usage] == ["tailor_compare", "tailor_compare"]
+    store2 = FakeStore()
+    svc = service(tmp_path, store2, ScriptedAI(patch()))
+    svc.run_job(JOB_ROW, SETTINGS)
+    assert store2.usage[0]["purpose"] == "tailor"                                  # and the real thing is unchanged
+
+
+def test_the_fact_check_of_a_comparison_has_its_own_purpose_too(tmp_path):
+    store = FakeStore()
+    ai = ScriptedAI(patch(), {"flagged": []})
+    service(tmp_path, store, ai).compare_job(JOB_ROW, ("v1",), dict(SETTINGS, verify=True))
+    assert [u["purpose"] for u in store.usage] == ["tailor_compare", "tailor_compare_verify"]
+
+
+def test_each_engine_gets_its_own_prompt_and_only_v2_has_the_gap_policy(tmp_path):
+    ai = ScriptedAI(patch(), patch())
+    service(tmp_path, ai=ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    assert "GAP POLICY" not in ai.calls[0]["system"] and "GAP POLICY" in ai.calls[1]["system"]
+
+
+def test_the_v2_draft_that_confesses_is_revised_and_the_revision_is_told_why(tmp_path):
+    ai = ScriptedAI(hedged_patch(), patch())
+    out = service(tmp_path, ai=ai).compare_job(JOB_ROW, ("v2",), SETTINGS)
+    r = out["runs"]["v2"]
+    assert len(ai.calls) == 2 and "never mention gaps" in ai.calls[1]["user"] and "I should be upfront" in ai.calls[1]["user"]
+    assert "one revision was needed to fix the first draft" in r["notes"] and r["audit"]["rejected"] == [] and not r["needs_attention"]
+
+
+def test_a_confession_that_survives_the_revision_is_cut_out_by_the_repair(tmp_path):
+    ai = ScriptedAI(hedged_patch(), hedged_patch())
+    out = service(tmp_path, ai=ai).compare_job(JOB_ROW, ("v2",), SETTINGS)
+    r = out["runs"]["v2"]
+    assert any(x["check"] == "audit" and "gap_disclosure" not in x["detail"] and "lacks" in x["detail"] for x in r["audit"]["rejected"])
+    assert r["needs_attention"] and any("unsupported content was removed" in a for a in r["attention"])
+    letter = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "v2" / "patch.json").read_text()
+    assert "upfront" not in letter and "evaluation harnesses" not in letter and "grow into that work" in letter
+
+
+def test_v1_keeps_doing_exactly_what_it_did_so_the_comparison_is_fair(tmp_path):
+    ai = ScriptedAI(hedged_patch())
+    out = service(tmp_path, ai=ai).compare_job(JOB_ROW, ("v1",), SETTINGS)
+    assert len(ai.calls) == 1 and out["runs"]["v1"]["audit"]["rejected"] == []
+    assert "I should be upfront" in (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "v1" / "patch.json").read_text()
+
+
+def test_a_budget_pause_stops_before_the_second_engine_spends_anything(tmp_path):
+    store, ai = FakeStore(budget={"day_remaining": 0.0001, "month_remaining": 10}), ScriptedAI(patch(), patch())
+    out = service(tmp_path, store, ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    assert list(out["runs"]) == ["v1"] and out["runs"]["v1"]["status"] == "budget_paused" and ai.calls == [] and store.usage == []
+    assert out["compare_md"] is None and not (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").exists()
+    assert store.released == [] and store.failures == []                              # nothing that belongs to the schedule was touched
+
+
+def test_an_api_failure_in_a_comparison_leaves_the_schedules_counters_alone(tmp_path):
+    store = FakeStore()
+    ai = ScriptedAI(A.AnthropicError("overloaded", 529, retryable=True))
+    out = service(tmp_path, store, ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    assert out["runs"]["v1"]["status"] == "api_error" and list(out["runs"]) == ["v1"] and ai.calls and len(ai.replies) == 0
+    assert store.failures == [] and store.released == [] and store.saved == []
+
+
+def test_a_second_engine_that_fails_is_reported_in_compare_md_and_the_first_still_shows(tmp_path):
+    out = service(tmp_path, ai=ScriptedAI(patch(), A.AnthropicError("overloaded", 529, retryable=True))).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    assert out["runs"]["v1"]["status"] == "compared" and out["runs"]["v2"]["status"] == "api_error"
+    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
+    letters = md.split("## Cover letter")[1].split("## Headline")[0]
+    assert "v2 did not finish: api_error" in md and "### v1" in letters and "### v2" not in letters
+
+
+def test_bad_engine_lists_are_refused_before_anything_is_spent(tmp_path):
+    store, ai = FakeStore(), ScriptedAI(patch())
+    svc = service(tmp_path, store, ai)
+    for bad in ((), ("v3",), ("v1", "x")):
+        with pytest.raises(ValueError):
+            svc.compare_job(JOB_ROW, bad, SETTINGS)
+    assert ai.calls == [] and store.usage == [] and not (tmp_path / "compare").exists()
+    assert list(svc.compare_job(JOB_ROW, ("v1", "v1"), SETTINGS)["runs"]) == ["v1"] and len(ai.calls) == 1      # a duplicate is one run
+
+
+def test_compare_md_puts_the_two_letters_and_the_numbers_side_by_side(tmp_path):
+    ai = ScriptedAI(hedged_patch(), patch())
+    service(tmp_path, ai=ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
+    for needle in ("# Compare: Senior Backend Engineer at Globex (job 24)", "Nothing here was saved as an application", "## At a glance",
+                   "| | v1 | v2 |", "| cost |", "| cover letter words |", "## Cover letter", "### v1", "### v2", "I should be upfront",
+                   "## Headline and summary", "## Reworded bullets", "was: Eliminated duplicate LLM billing", "## Requirement coverage (private notes)",
+                   "**gap**: Kafka", "## What the checks found"):
+        assert needle in md, needle
+    v1_letter = md.split("### v1")[1].split("### v2")[0]
+    v2_letter = md.split("### v2")[1].split("## Headline")[0]
+    assert "upfront" in v1_letter and "upfront" not in v2_letter
+
+
+def test_the_v2_summary_keeps_gaps_for_the_candidate_and_v1_is_unchanged(tmp_path):
+    out = service(tmp_path, ai=ScriptedAI(patch(), patch())).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    root = tmp_path / "compare" / "24-globex-senior-backend-engineer"
+    v1, v2 = (root / "v1" / "summary.md").read_text(), (root / "v2" / "summary.md").read_text()
+    assert "## Gaps and bridges (private notes" not in v1 and "## Requirement coverage" in v1
+    assert "## Gaps and bridges (private notes: none of this is in the letter or the summary)" in v2
+    assert "- **gap**: Kafka (not in my resume)" in v2 and out["runs"]["v2"]["requirements"]["gap"] == 1
+
+
+def test_a_normal_run_with_the_v2_engine_saves_an_application_like_any_other(tmp_path):
+    store = FakeStore()
+    r = service(tmp_path, store, ScriptedAI(patch())).run_job(JOB_ROW, dict(SETTINGS, engine="v2"))
+    assert r["status"] == "drafted" and len(store.saved) == 1 and store.usage[0]["purpose"] == "tailor"
+    assert (tmp_path / "applications" / "24-globex-senior-backend-engineer" / "summary.md").exists()
+
+
+def test_run_job_with_a_dry_dir_never_tracks_even_when_asked_to(tmp_path):
+    store = FakeStore(budget={"day_remaining": 0.0001, "month_remaining": 10})
+    r = service(tmp_path, store, ScriptedAI(patch())).run_job(JOB_ROW, SETTINGS, track=True, dry_dir=tmp_path / "x")
+    assert r["status"] == "budget_paused" and store.released == [] and store.failures == []
+
+
+def test_an_unknown_engine_in_the_settings_stops_a_run_before_it_spends(tmp_path):
+    store, ai = FakeStore(), ScriptedAI(patch())
+    with pytest.raises(ValueError):
+        service(tmp_path, store, ai).run_job(JOB_ROW, dict(SETTINGS, engine="v9"))
+    assert ai.calls == [] and store.usage == [] and store.saved == []
+
+
+class FlakyPDF(FakePDF):
+    """Renders fine for `ok` calls, then fails the way a render service that falls over mid-run does."""
+    def __init__(self, ok):
+        super().__init__()
+        self.ok, self.n = ok, 0
+
+    def html_to_pdf(self, html):
+        self.n += 1
+        if self.n > self.ok:
+            raise RuntimeError("the PDF service went away")
+        return super().html_to_pdf(html)
+
+
+def test_a_failure_in_the_second_engine_keeps_the_first_and_reports_what_was_spent(tmp_path):
+    store = FakeStore()
+    svc = service(tmp_path, store, ScriptedAI(patch(), patch()), FlakyPDF(ok=2))        # v1 renders resume + letter, v2 fails on its resume
+    out = svc.compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    assert out["runs"]["v1"]["status"] == "compared" and out["runs"]["v2"]["status"] == "failed"
+    assert "RuntimeError: the PDF service went away" in out["runs"]["v2"]["reason"]
+    assert out["runs"]["v2"]["cost_usd"] == pytest.approx(0.0123) and out["cost_usd"] == pytest.approx(0.0246)       # the paid draft is not hidden
+    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
+    assert "v2 did not finish: failed: RuntimeError" in md and store.saved == [] and store.failures == []
+
+
+def test_a_letter_containing_a_code_fence_cannot_break_out_of_the_comparison(tmp_path):
+    p = patch()
+    p["cover_letter"] = dict(p["cover_letter"], paragraphs=["I build Go services. ``` # not a heading ``` and more.", "I ran 50,000+ executions a day.", "I want to help your team."])
+    service(tmp_path, ai=ScriptedAI(p)).compare_job(JOB_ROW, ("v1",), SETTINGS)
+    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
+    block = md.split("### v1")[1].split("## Headline")[0]
+    assert "````\n" in block and block.count("````") == 2 and "# not a heading" in block        # a longer fence than the text's own
+
+
+def test_a_run_without_a_cover_letter_counts_zero_words_not_the_placeholder(tmp_path):
+    service(tmp_path, ai=ScriptedAI(patch(cover_letter=None))).compare_job(JOB_ROW, ("v1",), dict(SETTINGS, cover_letter=False))
+    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
+    assert "| cover letter words | 0 |" in md
+
+
+def test_compare_md_names_the_engines_of_this_run_and_a_base_resume_job(tmp_path):
+    out = service(tmp_path, ai=ScriptedAI(patch())).compare_job(dict(JOB_ROW, score=95), ("v2",), dict(SETTINGS, max_score=90, cover_letter=True))
+    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
+    assert "Engines in this run: v2 (a folder of another engine next to this file is from an earlier run)" in md
+    assert "your base resume is used as written" in md and out["runs"]["v2"]["variant"] == "base"
+
+
+def test_an_unscored_job_is_shown_as_not_scored(tmp_path):
+    service(tmp_path, ai=ScriptedAI(patch())).compare_job(dict(JOB_ROW, score=None, verdict=None), ("v1",), SETTINGS)
+    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
+    assert "- Score: not scored (no verdict)" in md
+
+
+# ------------------------------------------------------------------ T1b through the whole run
+
+def uncited_patch():
+    p = patch()
+    p["requirements"] = [dict(p["requirements"][0], evidence="w9-b9"), p["requirements"][1]]
+    return p
+
+
+@pytest.mark.parametrize("engine", ["v1", "v2"])
+def test_an_answer_that_cites_no_real_bullet_no_longer_costs_a_revision_or_fails(tmp_path, engine):
+    store, ai = FakeStore(), ScriptedAI(uncited_patch())
+    r = service(tmp_path, store, ai).run_job(JOB_ROW, dict(SETTINGS, engine=engine))
+    assert r["status"] == "drafted" and len(ai.calls) == 1 and store.failures == []        # one call: nothing to revise
+    assert r["requirements"] == {"matched": 0, "bridged": 0, "gap": 2}
+    saved_requirements = store.saved[0][6]
+    assert saved_requirements[0]["status"] == "gap" and "no real bullet was cited" in saved_requirements[0]["note"]
+    md = (tmp_path / "applications" / "24-globex-senior-backend-engineer" / "summary.md").read_text()
+    assert "no real bullet was cited, so this is shown as a gap" in md
+
+
+def test_the_repair_after_a_hedge_does_not_leave_a_dangling_opening_in_the_saved_letter(tmp_path):
+    p = patch()
+    p["cover_letter"] = dict(p["cover_letter"], paragraphs=[
+        "I should be upfront that I am early in my career. That is why I work hard. At Acme I built a platform for Globex-scale tenants.",
+        p["cover_letter"]["paragraphs"][1], p["cover_letter"]["paragraphs"][2]])
+    out = service(tmp_path, ai=ScriptedAI(p, p)).compare_job(JOB_ROW, ("v2",), SETTINGS)
+    letter = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "v2" / "patch.json").read_text()
+    assert "upfront" not in letter and "That is why" not in letter and "At Acme I built a platform for Globex-scale tenants." in letter
+    assert any("referred back" in n for n in out["runs"]["v2"]["notes"])
+
+
+# ------------------------------------------------------------------ tailoring v2: reviewer, company facts, proof points, page fit, evidence letter
+
+import math  # noqa: E402
+
+import company_notes as CN  # noqa: E402
+import tailor_v2 as V2  # noqa: E402
+
+V2S = dict(SETTINGS, engine="v2", reviewer=True, company_research=False)
+EVIDENCE = ["I am applying for the Senior Backend Engineer role at Globex. I build multi-tenant platforms in Go.",
+            "- Scale: I built a platform handling 50,000+ executions a day across 500+ tenants.",
+            "- Reliability: I made billing idempotent so retries never double-bill.",
+            "I would start with the Kubernetes services your team runs."]
+
+
+def evidence_patch():
+    p = patch()
+    p["cover_letter"] = dict(p["cover_letter"], paragraphs=list(EVIDENCE))
+    return p
+
+
+def review_reply(*edits, missed=()):
+    return {"edits": list(edits), "missed_keywords": list(missed)}
+
+
+def one_edit(where="cover letter paragraph 1", old="I build multi-tenant platforms in Go.", new="I build multi-tenant backends in Go.", reason="tighter"):
+    return {"where": where, "old": old, "new": new, "reason": reason}
+
+
+def run_v2(tmp_path, *replies, store=None, settings=None, pdf=None, **svc_kw):
+    store = store or FakeStore()
+    ai = ScriptedAI(*replies)
+    svc = S.TailorService(store, ai, pdf or FakePDF(), tmp_path, RESUME, PROFILE, **svc_kw)
+    return svc, store, ai, svc.run_job(JOB_ROW, settings or V2S)
+
+
+def test_the_v2_reviewer_applies_an_edit_that_passes_the_audit_and_sets_aside_one_that_does_not(tmp_path):
+    bad = one_edit("cover letter paragraph 2", "I built a platform", "I led a platform and used Terraform", "adds a claim")
+    svc, store, ai, r = run_v2(tmp_path, evidence_patch(), review_reply(one_edit(), bad, missed=["Kubernetes"]))
+    assert r["status"] == "drafted" and [u["purpose"] for u in store.usage] == ["tailor", "tailor_review"]
+    review = r["audit"]["review"]
+    assert [e["new"] for e in review["applied"]] == ["I build multi-tenant backends in Go."] and len(review["dropped"]) == 1 and review["missed_keywords"] == ["Kubernetes"]
+    saved_patch = store.saved[0][5]
+    assert "backends in Go" in saved_patch["cover_letter"]["paragraphs"][0] and "Terraform" not in str(saved_patch)
+    assert any("the reviewer's 1 edit(s) were applied (1 set aside)" in n for n in r["notes"])
+    md = (tmp_path / "applications" / "24-globex-senior-backend-engineer" / "summary.md").read_text()
+    assert "## Reviewer" in md and "- applied (cover letter paragraph 1): tighter" in md and "- set aside (cover letter paragraph 2)" in md
+
+
+def test_the_reviewer_uses_its_own_model_prompt_and_a_fenced_posting(tmp_path):
+    _, _, ai, _ = run_v2(tmp_path, evidence_patch(), review_reply(), settings=dict(V2S, reviewer_model="claude-haiku-5-5"))
+    call = ai.calls[1]
+    assert call["model"] == "claude-haiku-5-5" and "hiring manager" in call["system"] and "<untrusted_job_posting_" in call["user"]
+    assert "cover letter paragraph 2: - Scale:" in call["user"] and "bullet w1-b1:" in call["user"]
+
+
+@pytest.mark.parametrize("setting", [dict(reviewer=False), dict(engine="v1")])
+def test_no_reviewer_call_when_it_is_off_or_the_engine_is_v1(tmp_path, setting):
+    _, store, ai, r = run_v2(tmp_path, evidence_patch() if setting.get("engine") != "v1" else patch(), settings=dict(V2S, **setting))
+    assert len(ai.calls) == 1 and [u["purpose"] for u in store.usage] == ["tailor"] and "review" not in r["audit"]
+
+
+def test_a_reviewer_that_cannot_run_changes_nothing_and_costs_nothing_extra(tmp_path):
+    _, store, _, r = run_v2(tmp_path, evidence_patch(), A.AnthropicError("overloaded", 529, retryable=True))
+    assert r["status"] == "drafted" and any("reviewer unavailable" in n for n in r["notes"]) and [u["purpose"] for u in store.usage] == ["tailor"]
+    assert r["audit"]["review"] == {"applied": [], "dropped": [], "missed_keywords": []}
+
+
+def test_an_unusable_reviewer_reply_is_logged_as_a_failed_call_and_changes_nothing(tmp_path):
+    _, store, _, r = run_v2(tmp_path, evidence_patch(), "this is not json")
+    assert any("reviewer's reply was unusable" in n for n in r["notes"]) and store.usage[1]["purpose"] == "tailor_review" and store.usage[1]["ok"] is False
+
+
+def test_the_reviewer_is_skipped_when_the_budget_cannot_cover_it(tmp_path):
+    class Tight(FakeStore):
+        """Plenty of budget until the first model call has been paid for, then almost none."""
+        def budget_status(self):
+            return dict(OPEN_BUDGET) if not self.usage else dict(OPEN_BUDGET, day_remaining=0.0001, month_remaining=0.0001)
+    _, store, ai, r = run_v2(tmp_path, evidence_patch(), store=Tight())
+    assert len(ai.calls) == 1 and any("reviewer skipped (budget)" in n for n in r["notes"])
+
+
+def test_a_comparison_logs_the_reviewer_under_its_own_purpose(tmp_path):
+    store = FakeStore()
+    service(tmp_path, store, ScriptedAI(evidence_patch(), review_reply())).compare_job(JOB_ROW, ("v2",), V2S)
+    assert [u["purpose"] for u in store.usage] == ["tailor_compare", "tailor_compare_review"]
+
+
+def test_the_evidence_letter_is_validated_audited_and_rendered_as_a_list(tmp_path):
+    pdf = FakePDF()
+    _, store, _, r = run_v2(tmp_path, evidence_patch(), review_reply(), pdf=pdf)
+    assert r["status"] == "drafted" and not r["needs_attention"] and r["has_cover_letter"]
+    letter_html = next(h for h in pdf.html if "Dear Hiring Manager" in h)
+    assert letter_html.count('<ul class="ach">') == 1 and "<li><strong>Scale:</strong>" in letter_html
+
+
+def test_a_classic_style_run_under_v2_keeps_the_three_paragraphs(tmp_path):
+    _, _, ai, r = run_v2(tmp_path, patch(), review_reply(), settings=dict(V2S, cover_style="classic"))
+    assert r["status"] == "drafted" and "exactly 3 paragraphs" in ai.calls[0]["system"] and "4 to 6 short paragraphs" not in ai.calls[0]["system"]
+
+
+def test_proof_points_reach_the_prompt_the_audit_and_the_fact_check(tmp_path):
+    pts = V2.validate_proof_points([{"id": "pp-1", "bullet": "w1-b2", "project": "Billing safety", "role": "built", "what": "Made retries idempotent.",
+                                     "metric": "99.9% uptime over 12 months", "tech": [], "evidence": "status page"}], set(T.resume_index(RESUME)))[0]
+    p = evidence_patch()
+    p["cover_letter"]["paragraphs"][2] = "- Reliability: I made billing idempotent, which kept 99.9% uptime over 12 months."
+    verify = {"issues": []}
+    svc, store, ai, r = run_v2(tmp_path, p, review_reply(), verify, settings=dict(V2S, verify=True), proof_points=pts)
+    assert len(ai.calls) == 3 and r["status"] == "drafted" and not r["audit"]["rejected"]            # the number passed the audit: no revision, nothing removed
+    assert "PROOF POINTS" in ai.calls[0]["system"] and "pp-1 (bullet w1-b2" in ai.calls[0]["system"]
+    assert "MORE FACTS THE CANDIDATE CONFIRMED" in ai.calls[2]["system"] and "99.9% uptime over 12 months" in ai.calls[2]["system"]
+    _, _, ai2, r2 = run_v2(tmp_path, p, review_reply(), verify, settings=dict(V2S, verify=True))     # without them the same number is invented
+    assert len(ai2.calls) >= 2 and "PROOF POINTS" not in ai2.calls[0]["system"]
+
+
+def test_the_proof_points_are_not_used_by_v1(tmp_path):
+    pts = V2.validate_proof_points([{"id": "pp-1", "bullet": "w1-b2", "project": "Billing safety", "role": "built", "what": "Made retries idempotent.",
+                                     "metric": "", "tech": [], "evidence": ""}], set(T.resume_index(RESUME)))[0]
+    _, _, ai, _ = run_v2(tmp_path, patch(), settings=dict(V2S, engine="v1"), proof_points=pts)
+    assert "PROOF POINTS" not in ai.calls[0]["system"]
+
+
+# ---- company facts
+
+class NotesStore(FakeStore):
+    def __init__(self, **over):
+        super().__init__(**over)
+        self.notes, self.saved_notes, self.links = over.get("notes", {}), [], over.get("links", ["https://www.globex.com/careers/24"])
+
+    def company_notes_get(self, key, days=30): return self.notes.get(key)
+    def company_notes_save(self, key, facts, url): self.saved_notes.append((key, facts, url)); self.notes[key] = {"facts": facts, "source_url": url}
+    def job_links(self, job_id): return self.links
+
+
+PAGE = "Globex builds payment software for small merchants. Our platform helps shops accept cards and reconcile payouts every day."
+FACTS = {"facts": [{"fact": "Globex builds payment software for small merchants.", "quote": "Globex builds payment software for small merchants"},
+                   {"fact": "Globex was founded in 1999.", "quote": "Globex builds payment software"},
+                   {"fact": "Globex is the best payments company.", "quote": "the best payments company in the world"}]}
+CO = dict(V2S, company_research=True, reviewer=False)
+
+
+def test_company_facts_are_read_from_the_employers_own_site_extracted_with_quotes_and_cached(tmp_path):
+    fetched = []
+    store = NotesStore()
+    svc, _, ai, r = run_v2(tmp_path, FACTS, evidence_patch(), store=store, settings=CO, company_fetch=lambda d: fetched.append(d) or PAGE)
+    assert fetched == ["globex.com"] and len(ai.calls) == 2
+    assert store.saved_notes == [("globex", ["Globex builds payment software for small merchants."], "https://globex.com/")]      # the other two were dropped
+    assert "<untrusted_company_notes_" in ai.calls[1]["user"] and "- Globex builds payment software for small merchants." in ai.calls[1]["user"]
+    assert "at most ONE of them" in ai.calls[1]["user"] and "Globex builds payment" not in ai.calls[1]["system"]
+    assert [u["purpose"] for u in store.usage] == ["tailor_company", "tailor"] and any("company note: 1 fact(s) from globex.com" in n for n in r["notes"])
+
+
+def test_cached_facts_are_used_without_a_fetch_or_a_model_call(tmp_path):
+    store = NotesStore(notes={"globex": {"facts": ["Globex builds payment software for small merchants."], "source_url": "https://globex.com/"}})
+    _, _, ai, r = run_v2(tmp_path, evidence_patch(), store=store, settings=CO, company_fetch=lambda d: pytest.fail("fetched"))
+    assert len(ai.calls) == 1 and "- Globex builds payment software" in ai.calls[0]["user"] and any("from the cache" in n for n in r["notes"])
+
+
+@pytest.mark.parametrize("links,why", [(["https://www.linkedin.com/jobs/view/1"], "no company website"), (["https://boards.greenhouse.io/globex/jobs/1"], "no company website"),
+                                       (["https://www.other-company.com/jobs/1"], "no company website"), ([], "no company website")])
+def test_no_company_site_among_the_jobs_own_links_means_no_fetch_and_no_company_angle(tmp_path, links, why):
+    row = dict(JOB_ROW, canonical_url=None)
+    store = NotesStore(links=links)
+    svc = S.TailorService(store, ScriptedAI(evidence_patch()), FakePDF(), tmp_path, RESUME, PROFILE, company_fetch=lambda d: pytest.fail("fetched"))
+    r = svc.run_job(row, CO)
+    assert why in " ".join(r["notes"]) and store.saved_notes == [] and [u["purpose"] for u in store.usage] == ["tailor"]
+
+
+def test_a_site_that_cannot_be_read_is_remembered_so_it_is_not_asked_again_and_tailoring_goes_on(tmp_path):
+    store = NotesStore()
+    _, _, ai, r = run_v2(tmp_path, evidence_patch(), store=store, settings=CO, company_fetch=lambda d: None)
+    assert r["status"] == "drafted" and len(ai.calls) == 1 and store.saved_notes == [("globex", [], "https://globex.com/")]
+    assert any("could not read globex.com" in n for n in r["notes"])
+
+
+def test_company_research_off_or_a_store_without_the_cache_costs_and_does_nothing(tmp_path):
+    _, _, ai, _ = run_v2(tmp_path, evidence_patch(), store=NotesStore(), settings=dict(CO, company_research=False), company_fetch=lambda d: pytest.fail("fetched"))
+    assert len(ai.calls) == 1
+    _, _, ai2, r2 = run_v2(tmp_path, evidence_patch(), settings=CO, company_fetch=lambda d: pytest.fail("fetched"))        # FakeStore has no notes methods
+    assert r2["status"] == "drafted" and len(ai2.calls) == 1
+
+
+def test_company_research_never_runs_for_v1_and_a_failure_in_it_never_stops_tailoring(tmp_path):
+    _, _, ai, _ = run_v2(tmp_path, patch(), store=NotesStore(), settings=dict(CO, engine="v1"), company_fetch=lambda d: pytest.fail("fetched"))
+    assert len(ai.calls) == 1
+
+    def boom(domain):
+        raise RuntimeError("network down")
+    _, _, ai2, r2 = run_v2(tmp_path, evidence_patch(), store=NotesStore(), settings=CO, company_fetch=boom)
+    assert r2["status"] == "drafted" and any("company note failed: RuntimeError" in n for n in r2["notes"])
+
+
+def test_the_company_note_is_skipped_when_the_budget_is_tight_and_an_api_error_is_not_fatal(tmp_path):
+    _, _, ai, r = run_v2(tmp_path, A.AnthropicError("overloaded", 529, retryable=True), evidence_patch(), store=NotesStore(), settings=CO, company_fetch=lambda d: PAGE)
+    assert r["status"] == "drafted" and any("company note unavailable" in n for n in r["notes"])
+    _, _, ai2, r2 = run_v2(tmp_path, "not json", evidence_patch(), store=NotesStore(), settings=CO, company_fetch=lambda d: PAGE)
+    assert r2["status"] == "drafted" and len(ai2.calls) == 2
+
+
+def test_a_company_fact_in_the_letter_is_allowed_and_a_made_up_one_is_not(tmp_path):
+    store = NotesStore()
+    p = evidence_patch()
+    p["cover_letter"]["paragraphs"][0] = "I am applying for the Senior Backend Engineer role at Globex, which builds payment software for small merchants."
+    _, _, _, r = run_v2(tmp_path, FACTS, p, store=store, settings=CO, company_fetch=lambda d: PAGE)
+    assert not r["audit"]["rejected"]
+
+
+# ---- the page fit
+
+class SizedPDF(FakePDF):
+    """A resume that fills the page in proportion to its words and the scale: so cutting words lets the type stay larger."""
+    def __init__(self, cap):
+        super().__init__()
+        self.cap = cap
+
+    def html_to_pdf(self, html):
+        import re as _re
+        scale = float(_re.search(r"--s:\s*([0-9.]+)", html).group(1))
+        words = len(_re.sub(r"<[^>]+>", " ", _re.sub(r"<style>.*?</style>", " ", html, flags=_re.S)).split())
+        self.pages = 1 if "Dear Hiring Manager" in html or words * scale <= self.cap else 2
+        return super().html_to_pdf(html)
+
+
+def many_bullets_resume():
+    r = copy.deepcopy(RESUME)
+    r["work"][1]["highlights"] += [{"id": f"w2-x{i}", "text": "Organised internal events for the team."} for i in range(1, 5)]
+    return r
+
+
+def test_v2_drops_the_least_relevant_older_bullets_before_shrinking_the_type_below_92_percent(tmp_path):
+    resume = many_bullets_resume()
+    p = patch()
+    p["work"][1]["order"] = ["w2-b1"] + [f"w2-x{i}" for i in range(1, 5)]
+    pdf_probe = SizedPDF(cap=10 ** 9)
+    words = None
+    svc = S.TailorService(FakeStore(), ScriptedAI(p, review_reply()), pdf_probe, tmp_path, resume, PROFILE)
+    svc.run_job(JOB_ROW, dict(V2S, reviewer=False, max_pages=1))                      # a roomy page: measure the resume's size
+    import re as _re
+    words = len(_re.sub(r"<[^>]+>", " ", _re.sub(r"<style>.*?</style>", " ", pdf_probe.html[0], flags=_re.S)).split())
+    cap = words * 0.85                                                                # needs about 85% of full size: below the 92% line
+    store = FakeStore()
+    r = S.TailorService(store, ScriptedAI(p), SizedPDF(cap), tmp_path / "b", resume, PROFILE).run_job(JOB_ROW, dict(V2S, reviewer=False, max_pages=1))
+    assert any("less relevant bullet(s) from older roles" in n for n in r["notes"])
+    saved = store.saved[0][5]
+    spec = next(w for w in saved["work"] if w["id"] == "w2")
+    assert "w2-b1" in spec["order"] and len(spec["order"]) < 5 and next(w for w in saved["work"] if w["id"] == "w1")["order"]      # main role untouched
+
+
+def test_v1_never_cuts_bullets_to_fit_and_a_page_that_already_fits_is_left_alone(tmp_path):
+    resume = many_bullets_resume()
+    p = patch()
+    p["work"][1]["order"] = ["w2-b1"] + [f"w2-x{i}" for i in range(1, 5)]
+    store = FakeStore()
+    S.TailorService(store, ScriptedAI(p), SizedPDF(cap=300), tmp_path, resume, PROFILE).run_job(JOB_ROW, dict(V2S, engine="v1", reviewer=False, max_pages=1))
+    assert len(next(w for w in store.saved[0][5]["work"] if w["id"] == "w2")["order"]) == 5
+    store2 = FakeStore()
+    r = S.TailorService(store2, ScriptedAI(p), FakePDF(), tmp_path / "c", resume, PROFILE).run_job(JOB_ROW, dict(V2S, reviewer=False, max_pages=1))
+    assert not any("less relevant bullet" in n for n in r["notes"])
+
+
+# ---- keywords in the saved result
+
+def test_the_v2_run_reports_keywords_and_emphasises_the_supported_ones_the_draft_left_low(tmp_path):
+    row = dict(JOB_ROW, description="We use Go, Kafka, Kubernetes and gRPC. Experience with Tailwind CSS is a plus.")
+    p = evidence_patch()
+    p["skills"] = {"order": ["Backend", "Languages", "Frontend"], "emphasize": ["go"]}
+    store = FakeStore()
+    r = S.TailorService(store, ScriptedAI(p, review_reply()), FakePDF(), tmp_path, RESUME, PROFILE).run_job(row, V2S)
+    kw = r["audit"]["keywords"]
+    assert "Kafka" in kw["missing"] and "Go" in kw["shown"] + kw["low"]
+    emphasised = store.saved[0][5]["skills"]["emphasize"]
+    assert set(kw["low"]) <= set(emphasised) and "Kafka" not in emphasised                # only what the resume really has
+    md = (tmp_path / "applications" / "24-globex-senior-backend-engineer" / "summary.md").read_text()
+    assert "## Keyword coverage" in md and "Kafka" in md
+    r1 = S.TailorService(FakeStore(), ScriptedAI(patch()), FakePDF(), tmp_path / "v1", RESUME, PROFILE).run_job(row, dict(V2S, engine="v1"))
+    assert "keywords" not in r1["audit"]
+
+
+def test_compare_md_shows_the_reviewer_row_and_the_keyword_section(tmp_path):
+    service(tmp_path, ai=ScriptedAI(patch(), evidence_patch(), review_reply(one_edit()))).compare_job(JOB_ROW, ("v1", "v2"), V2S)
+    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
+    assert "| reviewer edits applied / set aside | 0 / 0 | 1 / 0 |" in md and "## Keyword coverage" in md and "(only the v2 engine reports this)" in md
+
+
+# ---- second review: cover-only, spend accounting
+
+def test_a_resume_used_as_written_lets_the_reviewer_see_and_edit_only_the_letter(tmp_path):
+    row = dict(JOB_ROW, score=80)
+    store = FakeStore()
+    cover_only = patch()
+    cover_only = {"requirements": cover_only["requirements"], "cover_letter": dict(cover_only["cover_letter"], paragraphs=list(EVIDENCE)), "mode": "cover_only"}
+    edits = review_reply(one_edit("bullet w1-b4", "Cut ~20 redundant", "Cut redundant", "tighter"), one_edit())
+    ai = ScriptedAI(cover_only, edits)
+    r = S.TailorService(store, ai, FakePDF(), tmp_path, RESUME, PROFILE).run_job(row, dict(V2S, max_score=70))
+    assert r["variant"] == "base" and r["status"] == "drafted"
+    seen = ai.calls[1]["user"]
+    assert "bullet w1-b" not in seen and "headline:" not in seen and "cover letter paragraph 1:" in seen            # only the letter was shown
+    rv = r["audit"]["review"]
+    assert [e["where"] for e in rv["applied"]] == ["cover letter paragraph 1"] and "used as written" in rv["dropped"][0]["why"]
+    assert not store.saved[0][5].get("work")                                                                       # no resume change was recorded
+
+
+def test_the_reviewers_and_the_fact_checks_spend_count_in_the_failure_cost(tmp_path):
+    store = FakeStore()
+    svc = S.TailorService(store, ScriptedAI(evidence_patch(), review_reply(), {"issues": []}), FakePDF(), tmp_path, RESUME, PROFILE)
+    r = svc.run_job(JOB_ROW, dict(V2S, verify=True))
+    assert r["cost_usd"] == pytest.approx(0.0369) and svc._job_spend == pytest.approx(0.0369)              # draft + reviewer + fact check

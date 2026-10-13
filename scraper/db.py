@@ -202,20 +202,61 @@ class PgStore:
             return cur.fetchall()
 
     # ---- tailoring, review, telegram -----------------------------------------------------
+    _TAILOR_BASE = "mode, min_score, max_score, daily_limit, approval, model, cover_letter, max_pages, verify, verify_model, paper, style_notes"
+    _TAILOR_V2 = "engine, gap_policy, cover_style, tone, reviewer, reviewer_model, company_research"
+    _TAILOR_V2_DEFAULTS = {"engine": "v1", "gap_policy": "omit", "cover_style": "evidence", "tone": "direct", "reviewer": True,
+                           "reviewer_model": "claude-haiku-5-5", "company_research": True}
+
     def tailor_settings(self) -> dict:
-        with self.cursor() as cur:
-            cur.execute("SELECT mode, min_score, max_score, daily_limit, approval, model, cover_letter, max_pages, verify, verify_model, paper, style_notes "
-                        "FROM tailor_settings WHERE id = 1")
-            return cur.fetchone()
+        try:
+            with self.cursor() as cur:
+                cur.execute(f"SELECT {self._TAILOR_BASE}, {self._TAILOR_V2} FROM tailor_settings WHERE id = 1")
+                return cur.fetchone()
+        except psycopg.errors.UndefinedColumn:
+            # migration 026 is not applied yet: the engine is v1, whatever else the defaults say. (The failed statement aborted that
+            # transaction, and leaving the `with` rolled it back, so the next one starts clean.)
+            with self.cursor() as cur:
+                cur.execute(f"SELECT {self._TAILOR_BASE} FROM tailor_settings WHERE id = 1")
+                return {**cur.fetchone(), **self._TAILOR_V2_DEFAULTS}
 
     def update_tailor_settings(self, **fields) -> dict:
-        allowed = {"mode", "min_score", "max_score", "daily_limit", "approval", "model", "cover_letter", "max_pages", "verify", "verify_model", "paper", "style_notes"}
+        allowed = {"mode", "min_score", "max_score", "daily_limit", "approval", "model", "cover_letter", "max_pages", "verify", "verify_model", "paper", "style_notes",
+                   "engine", "gap_policy", "cover_style", "tone", "reviewer", "reviewer_model", "company_research"}
         cols = [k for k in fields if k in allowed]
         if cols:
-            with self.cursor() as cur:
-                cur.execute("UPDATE tailor_settings SET " + ", ".join(f"{c} = %s" for c in cols) + ", updated_at = now() WHERE id = 1",
-                            [fields[c] for c in cols])
+            try:
+                with self.cursor() as cur:
+                    cur.execute("UPDATE tailor_settings SET " + ", ".join(f"{c} = %s" for c in cols) + ", updated_at = now() WHERE id = 1",
+                                [fields[c] for c in cols])
+            except psycopg.errors.UndefinedColumn:
+                raise LookupError("this database has no tailoring v2 settings yet: run scripts/jobsearch migrate")
         return self.tailor_settings()
+
+    # ---- tailoring v2: a cache of plain facts about an employer, and the links a job was found at --------------------------
+    def company_notes_get(self, key: str, days: int = 30) -> Optional[dict]:
+        """{'facts': [...], 'source_url', 'fetched_at'} when fresh, else None. None too before migration 026."""
+        try:
+            with self.cursor() as cur:
+                cur.execute("SELECT facts, source_url, fetched_at FROM company_notes WHERE company_key = %s "
+                            "AND fetched_at > now() - make_interval(days => %s)", (key, int(days)))
+                return cur.fetchone()
+        except psycopg.errors.UndefinedTable:
+            return None
+
+    def company_notes_save(self, key: str, facts: list, source_url: Optional[str]) -> None:
+        try:
+            with self.cursor() as cur:
+                cur.execute("INSERT INTO company_notes (company_key, facts, source_url) VALUES (%s, %s::jsonb, %s) "
+                            "ON CONFLICT (company_key) DO UPDATE SET facts = EXCLUDED.facts, source_url = EXCLUDED.source_url, fetched_at = now()",
+                            (key, Json(list(facts)[:3]), (source_url or None) and source_url[:300]))
+        except psycopg.errors.UndefinedTable:
+            pass
+
+    def job_links(self, job_id: int) -> list:
+        """The links the job was found at (its own, never text from the posting): every source's page and apply link."""
+        with self.cursor() as cur:
+            cur.execute("SELECT url, apply_url FROM job_sources WHERE job_id = %s", (job_id,))
+            return [u for row in cur.fetchall() for u in (row["url"], row["apply_url"]) if u]
 
     # ---- optional parts (feature switches) and manual status editing ---------------------
     def features(self) -> dict:

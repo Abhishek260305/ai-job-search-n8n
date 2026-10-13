@@ -43,7 +43,7 @@ Verified on a live system: with the cap set below one worst-case job, a batch re
 
 Prices used (per million tokens, from Anthropic's pricing page, checked 2026-10-11): Haiku 5.5 $0.10 in / $0.50 out / $0.01 cache read; Sonnet 5.5 $2 / $10 / $0.10; Opus 5.5 $4 / $20 / $0.20. Batch requests are 50% cheaper. Haiku 5.5 charges higher rates only for prompts over 100,000 tokens, far beyond ours.
 
-Tailoring on Claude Sonnet 5.5 (measured on real runs): about **$0.04-0.05 per application** for the draft plus one revision, plus about **$0.001** for the Haiku fact check. The fact check is logged as its own purpose (`tailor_verify`), separate from `tailor`.
+Tailoring on Claude Sonnet 5.5 (measured on real runs): about **$0.04-0.05 per application** for the draft plus one revision, plus about **$0.001** for the Haiku fact check. The fact check is logged as its own purpose (`tailor_verify`), separate from `tailor`. With the v2 engine ([tailoring.md](tailoring.md#tailoring-v2-and-comparing-the-engines)) the reviewer pass (`tailor_review`) and the company note (`tailor_company`) are logged the same way, and `tailor-compare` runs use `tailor_compare`, `tailor_compare_review`, ... so a comparison is never mistaken for real tailoring.
 
 **What $10 buys.** Scoring alone is well under $2 a month even for hundreds of new jobs a day. At about 5 cents each, $10 comfortably covers scoring plus on the order of 100-150 tailored applications a month. If you tailor far more than that, raise the cap, set `max_score` / `daily_limit`, or use a cheaper model for tailoring.
 

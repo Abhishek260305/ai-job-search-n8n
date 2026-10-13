@@ -16,6 +16,7 @@ ssh-key-*
 
 # Personal data (keep only the *.example.* versions in git)
 config/resume.json
+config/proof_points.json
 config/profile.json
 config/search.json
 config/search.json.before-pull*

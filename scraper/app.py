@@ -66,6 +66,7 @@ import profile_tools
 import tailor_service
 import ondemand
 import tailor
+import tailor_v2
 import telegram_bot
 import safety
 import schedules
@@ -484,6 +485,24 @@ def _features(store) -> dict:
     return features.effective(store.features(), os.environ)
 
 
+def _load_proof_points(resume: dict) -> list:
+    """config/proof_points.json (optional): the candidate's confirmed facts behind resume bullets (tailoring v2). A missing file is none;
+    a file with problems keeps only its valid points and logs the rest, so one typo never stops tailoring."""
+    path = os.environ.get("PROOF_POINTS_PATH", "/config/proof_points.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:                      # ValueError: bad JSON, or bytes that are not UTF-8
+        log.warning("proof_points.json could not be read: %s", e)
+        return []
+    points, problems = tailor_v2.validate_proof_points(raw, set(tailor.resume_index(resume)))
+    for problem in problems:
+        log.warning("proof_points.json: %s", problem)
+    return points
+
+
 def _tailor_service(store) -> "tailor_service.TailorService":
     import anthropic_client
     import render
@@ -493,8 +512,9 @@ def _tailor_service(store) -> "tailor_service.TailorService":
         raise HTTPException(status_code=503, detail={"errors": [str(e)]})
     profile = scoring.load_profile(os.environ.get("PROFILE_PATH", "/config/profile.json"))
     pdf = render.GotenbergClient(os.environ.get("GOTENBERG_URL", "http://gotenberg:3000"))
-    return tailor_service.TailorService(store, ai, pdf, OUTPUT_DIR, _load_resume(), profile,
-                                        telegram_on=_features(store)["telegram"]["on"])
+    resume = _load_resume()
+    return tailor_service.TailorService(store, ai, pdf, OUTPUT_DIR, resume, profile,
+                                        telegram_on=_features(store)["telegram"]["on"], proof_points=_load_proof_points(resume))
 
 
 def _bot(store, svc=None):
@@ -530,6 +550,13 @@ class TailorSettingsRequest(BaseModel):
     max_pages: Optional[int] = None
     paper: Optional[str] = None
     style_notes: Optional[str] = None
+    engine: Optional[str] = None            # tailoring v2 (migration 026): v1 | v2
+    gap_policy: Optional[str] = None        # omit | bridge
+    cover_style: Optional[str] = None       # evidence | classic
+    tone: Optional[str] = None              # formal | direct | conversational
+    reviewer: Optional[bool] = None
+    reviewer_model: Optional[str] = None
+    company_research: Optional[bool] = None
     clear: list[str] = []          # settings to reset to "none" (min_score, max_score, daily_limit)
 
 
@@ -639,10 +666,18 @@ def _on_demand_plan(s, job_id: int, *, check_registry: bool = True) -> dict:
     if plan["variant"] == "tailored" or plan["cover_letter"]:
         plan["uses_model"] = True
         mode = "full" if plan["variant"] == "tailored" else "cover_only"
-        prompt = tailor.prepare(_load_resume(), scoring.load_profile(os.environ.get("PROFILE_PATH", "/config/profile.json")), job,
+        try:
+            engine, gap_policy = tailor.engine_options(settings)
+            opts = tailor.style_options(settings)
+        except ValueError as e:
+            return block(409, f"the tailoring settings are not valid: {e}")
+        resume_ = _load_resume()
+        prompt = tailor.prepare(resume_, scoring.load_profile(os.environ.get("PROFILE_PATH", "/config/profile.json")), job,
                                 cover_letter=plan["cover_letter"], mode=mode,
                                 notes={"strengths": job.get("strengths") or [], "gaps": job.get("gaps") or []},
-                                today=date.today(), style_notes=settings.get("style_notes"))
+                                today=date.today(), style_notes=settings.get("style_notes"), engine=engine, gap_policy=gap_policy,
+                                proof_points=_load_proof_points(resume_) if engine == "v2" else None,
+                                cover_style=opts["cover_style"], tone=opts["tone"])
         worst = budget.worst_case_item_cost(s.pricing(settings["model"]), len(prompt["system"]) + len(prompt["user"]) * 2 + 9000,
                                             prompt["max_tokens"])
         # a draft and a possible revision: what the guard in run_job reserves; plus the fact-check call (a cheap model by
@@ -651,7 +686,13 @@ def _on_demand_plan(s, job_id: int, *, check_registry: bool = True) -> dict:
         if settings.get("verify") and mode == "full":
             vmodel = settings.get("verify_model") or "claude-haiku-5-5"
             verify = budget.worst_case_item_cost(s.pricing(vmodel), len(prompt["system"]) + len(prompt["user"]) + 9000, 1500)
-        plan["at_most_usd"] = round(worst * 2 + verify, 4)
+        extra = 0.0           # v2's two extra calls, priced at their worst case like the rest
+        if engine == "v2":
+            if opts["reviewer"]:
+                extra += budget.worst_case_item_cost(s.pricing(opts["reviewer_model"]), len(prompt["system"]) // 2 + len(prompt["user"]) + 6000, 1800)
+            if opts["company_research"] and plan["cover_letter"]:
+                extra += budget.worst_case_item_cost(s.pricing(settings.get("verify_model") or "claude-haiku-5-5"), 9000, 500)
+        plan["at_most_usd"] = round(worst * 2 + verify + extra, 4)
         typical = s.recent_tailor_cost()
         plan["typical_usd"] = round(min(typical if typical else 0.05, plan["at_most_usd"]), 4)
         if budget.allowed_items(status, 1, worst * 2) < 1:
@@ -719,6 +760,48 @@ def tailor_start(req: TailorStartRequest):
 @app.get("/tailor/status")
 def tailor_status(job_id: Annotated[int, Query(ge=1, le=2**63 - 1)]):
     return _ondemand.status(job_id)
+
+
+# ---------------------------------------------------------------- comparing tailoring engines (docs/superpowers/plans/2026-10-13-tailoring-v2.md, T0)
+# One job at a time, both engines, into output/compare/. It spends real money (a draft per engine, inside the same budget guard
+# and caps) but writes no application, changes no status and sends no message. It never waits for the tailoring lock: a
+# scheduled run that holds it means "try again in a minute", having spent nothing.
+
+class TailorCompareRequest(BaseModel):
+    job_id: Annotated[int, Field(strict=True, ge=1, le=2**63 - 1)]
+    engines: list[str] = ["v1", "v2"]
+
+
+@app.post("/tailor/compare")
+def tailor_compare(req: TailorCompareRequest):
+    engines = list(dict.fromkeys(req.engines))
+    if not engines or any(e not in tailor.ENGINES for e in engines):
+        raise HTTPException(status_code=422, detail={"errors": [f"engines must be some of {', '.join(tailor.ENGINES)}"]})
+
+    def run(s):
+        eff = _features(s)["tailoring"]
+        if not eff["on"]:
+            raise HTTPException(status_code=409, detail={"errors": [f"tailoring is {eff['reason']}"]})
+        if (s.schedule_pause() or {}).get("paused"):
+            raise HTTPException(status_code=409, detail={"errors": ["everything is paused (the emergency brake): resume first with scripts/jobsearch schedule resume"]})
+        job = s.get_job(req.job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail={"errors": [f"no job {req.job_id}"]})
+        if job.get("status") == "scam_blocked":
+            raise HTTPException(status_code=422, detail={"errors": [f"job {req.job_id} is scam_blocked: nothing is written for it, not even a comparison"]})
+        if not (job.get("description") or "").strip():
+            raise HTTPException(status_code=422, detail={"errors": [f"job {req.job_id} has no description to tailor against"]})
+        if not _tailor_lock.acquire(blocking=False):
+            raise HTTPException(status_code=409, detail={"errors": ["a tailoring run is going right now: try again in a minute (nothing was spent)"]})
+        try:
+            svc = _tailor_service(s)
+            health = getattr(getattr(svc, "pdf", None), "health", None)
+            if health is not None and not health():
+                raise HTTPException(status_code=409, detail={"errors": ["the PDF service is not answering: nothing was started and nothing was spent"]})
+            return svc.compare_job(job, engines)
+        finally:
+            _tailor_lock.release()
+    return _db_call(run)
 
 
 @app.get("/tailor/settings")

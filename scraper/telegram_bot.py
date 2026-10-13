@@ -137,6 +137,19 @@ def parse_setting(key: str, value: str) -> tuple[str, object]:
         if value not in ("1", "2"):
             raise ValueError("max_pages must be 1 or 2")
         return "max_pages", int(value)
+    for name, choices in (("engine", ("v1", "v2")), ("gap_policy", ("omit", "bridge")), ("cover_style", ("evidence", "classic")),
+                          ("tone", ("formal", "direct", "conversational"))):
+        if key == name:
+            if value.lower() not in choices:
+                raise ValueError(f"{name} must be {' or '.join(choices)}")
+            return name, value.lower()
+    for name in ("reviewer", "company_research"):
+        if key == name:
+            if value.lower() in ("on", "true", "yes", "1"):
+                return name, True
+            if value.lower() in ("off", "false", "no", "0"):
+                return name, False
+            raise ValueError(f"{name} must be on or off")
     raise ValueError(f"unknown setting '{key}' (see /help)")
 
 
@@ -145,7 +158,7 @@ def normalise_settings(fields: dict) -> dict:
     A value of None means 'none' for the optional numeric settings. Raises ValueError."""
     out: dict = {}
     for key, v in fields.items():
-        if key in ("model", "verify_model"):
+        if key in ("model", "verify_model", "reviewer_model"):
             if not isinstance(v, str) or not re.fullmatch(r"[A-Za-z0-9._-]{3,80}", v):
                 raise ValueError("model must be a model name such as claude-sonnet-5-5")
             out[key] = v
@@ -166,7 +179,10 @@ def settings_text(s: dict) -> str:
         f"daily_limit: {s['daily_limit'] if s['daily_limit'] is not None else 'none'}",
         f"cover_letter: {'on' if s['cover_letter'] else 'off'}   max_pages: {s['max_pages']}   paper: {s.get('paper', 'a4')}   model: {s['model']}",
         f"style_notes: {s.get('style_notes') or 'none'}",
-        f"verify (fact check): {'on' if s.get('verify', True) else 'off'}   ({s.get('verify_model', 'claude-haiku-5-5')})"])
+        f"verify (fact check): {'on' if s.get('verify', True) else 'off'}   ({s.get('verify_model', 'claude-haiku-5-5')})",
+        f"engine: {s.get('engine', 'v1')}   (v1 is today's writer; v2 is the newer one, see `tailor-compare`)   gap_policy: {s.get('gap_policy', 'omit')}   "
+        f"cover_style: {s.get('cover_style', 'evidence')}   tone: {s.get('tone', 'direct')}",
+        f"reviewer: {'on' if s.get('reviewer', True) else 'off'} ({s.get('reviewer_model', 'claude-haiku-5-5')})   company_research: {'on' if s.get('company_research', True) else 'off'}"])
 
 
 def friendly_names(basics: dict, company: str) -> tuple[str, str]:

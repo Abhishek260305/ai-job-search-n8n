@@ -11,6 +11,7 @@ Commands:
   status                  what the pipeline has found and what needs attention
   budget [set]            Claude spend vs your caps; `budget set --monthly 10 --daily 1.5` changes them
   tailor [JOB_ID]         tailor one job (or the next eligible ones): draft, honesty checks, PDFs
+  tailor-compare N [N..]  tailor jobs with two engines (v1 today, v2 experimental) into output/compare/, side by side; saves no application
   review                  applications waiting for your decision
   approve|skip|applied N  record your decision on job N (works with or without tailoring)
   mark N STAGE            set any stage by hand: interview, offer, rejected, ... (no Gmail needed)
@@ -67,6 +68,8 @@ import gmail_login  # noqa: E402
 import mail  # noqa: E402
 import schedules  # noqa: E402
 import scoring  # noqa: E402
+import tailor  # noqa: E402
+import tailor_v2  # noqa: E402
 import sources  # noqa: E402
 
 DEFAULT_MODEL = "claude-haiku-5-5"
@@ -168,8 +171,8 @@ class Stack:
         wrapped = f"SELECT coalesce(json_agg(t), '[]'::json) FROM ({sql.rstrip().rstrip(';')}) t;"
         return json.loads(self.psql(wrapped, db).strip() or "[]")
 
-    def scraper_py(self, code: str) -> str:
-        return self._ok(self.compose(["exec", "-T", "scraper", "python", "-"], input_text=code, timeout=90))
+    def scraper_py(self, code: str, timeout: int = 90) -> str:
+        return self._ok(self.compose(["exec", "-T", "scraper", "python", "-"], input_text=code, timeout=timeout))
 
     def exec_out(self, service: str, args: list[str]) -> str:
         return self._ok(self.compose(["exec", "-T", service] + args))
@@ -622,15 +625,17 @@ def budget_set_sql(monthly=None, daily=None, warn_pct=None, apify_monthly=None, 
 
 # ---------------------------------------------------------------- tailoring and review
 
-def _service_call(stack, method: str, path: str, body: Optional[dict] = None, timeout: int = 900) -> tuple[int, dict]:
-    """Call the scraper service from inside its container (nothing is exposed on the network)."""
+def _service_call(stack, method: str, path: str, body: Optional[dict] = None, timeout: int = 900, wait: Optional[int] = None) -> tuple[int, dict]:
+    """Call the scraper service from inside its container (nothing is exposed on the network). `wait` is how long the whole
+    command may take before it is given up on (a call that runs a model twice needs more than the default)."""
     code = ("import json, urllib.request, urllib.error\n"
             f"body = {json.dumps(json.dumps(body))} if {body is not None!r} else None\n"
             f"r = urllib.request.Request('http://localhost:8000{path}', body.encode() if body else None, "
             f"{{'Content-Type': 'application/json'}}, method={method!r})\n"
             "try:\n    resp = urllib.request.urlopen(r, timeout=" + str(timeout) + "); print(json.dumps({'status': resp.status, 'body': json.load(resp)}))\n"
             "except urllib.error.HTTPError as e:\n    print(json.dumps({'status': e.code, 'body': json.load(e)}))\n")
-    out = json.loads(stack.scraper_py(code).strip().splitlines()[-1])
+    raw = stack.scraper_py(code) if wait is None else stack.scraper_py(code, timeout=wait)
+    out = json.loads(raw.strip().splitlines()[-1])
     return out["status"], out["body"]
 
 
@@ -660,6 +665,57 @@ def run_tailor(stack, job_id: Optional[int], limit: Optional[int]) -> str:
     if not lines:
         lines.append("No eligible jobs (shortlisted, above the minimum score, not yet tailored).")
     lines.append(f"Telegram: {body.get('telegram')}" + (f", {body['notified']} review message(s) sent" if body.get("notified") else ""))
+    return "\n".join(lines)
+
+
+TAILOR_ENGINES = ("v1", "v2")
+MAX_COMPARE_JOBS = 10
+
+
+def run_tailor_compare(stack, job_ids: list, engines: list) -> str:
+    """Tailor each job with each engine into output/compare/ (nothing is saved as an application) and say where to read it."""
+    if not job_ids:
+        raise CheckError("give at least one job id")
+    if len(job_ids) > MAX_COMPARE_JOBS:
+        raise CheckError(f"at most {MAX_COMPARE_JOBS} jobs at a time (each one costs a draft per engine)")
+    engines = list(dict.fromkeys(engines))
+    if not engines or any(e not in TAILOR_ENGINES for e in engines):
+        raise CheckError(f"engines must be some of {', '.join(TAILOR_ENGINES)}")
+    job_ids = list(dict.fromkeys(job_ids))                      # the same job twice would be paid for twice
+    ssh = getattr(stack, "ssh", [])
+    base = stack.remote_dir if ssh else str(getattr(stack, "repo", REPO))
+    lines = [f"Comparing the tailoring engines {', '.join(engines)} on {len(job_ids)} job(s). This uses the Claude API (about $0.05 per engine "
+             "per job, inside your caps) and saves nothing as an application.", ""]
+    total = 0.0
+    for job_id in job_ids:
+        try:
+            # the service call gives up a little before the command does, so the answer (or its error) is what comes back
+            status, body = _service_call(stack, "POST", "/tailor/compare", {"job_id": job_id, "engines": engines}, timeout=540, wait=600)
+        except StackError as ex:
+            lines.append(f"job {job_id}: no answer ({ex}). The server may still be running it: look in output/compare, and wait a few minutes "
+                         "before the next one (it holds the tailoring lock)")
+            break                                               # the next job would only wait behind this one
+        if status != 200:
+            lines.append(f"job {job_id}: not compared: {_errors(body)}")
+            continue
+        total += float(body.get("cost_usd") or 0)
+        parts = []
+        for engine, r in (body.get("runs") or {}).items():
+            if r.get("status") == "compared":
+                c = r.get("requirements") or {}
+                audit = r.get("audit") or {}
+                parts.append(f"{engine}: ${r['cost_usd']:.3f}, {c.get('matched', 0)} matched / {c.get('bridged', 0)} bridged / {c.get('gap', 0)} gaps, "
+                             f"{len(audit.get('rejected') or [])} removed, {len(audit.get('soft') or [])} to check"
+                             + (", needs attention" if r.get("needs_attention") else ""))
+            else:
+                parts.append(f"{engine}: {r.get('status')}: {r.get('reason')}")
+        lines.append(f"job {job_id}: " + "  |  ".join(parts))
+        md = body.get("compare_md")
+        if md:
+            lines.append("    read: " + (md.replace("/output/", f"{base}/output/", 1) if md.startswith("/output/") else md))
+    lines += ["", f"spent: ${total:.3f}"]
+    if ssh:
+        lines.append(f"copy to this machine:  scp -r {ssh[-1]}:{base}/output/compare .")
     return "\n".join(lines)
 
 
@@ -723,7 +779,11 @@ def run_tailor_settings(stack) -> str:
         f"daily_limit:  {b['daily_limit'] if b['daily_limit'] is not None else 'none'}",
         f"cover_letter: {'on' if b['cover_letter'] else 'off'}   max_pages: {b['max_pages']}   paper: {b.get('paper', 'a4')}   model: {b['model']}",
         f"style_notes:  {b.get('style_notes') or 'none'}   (tone and wording preferences; never lets the writing add facts)",
-        f"fact check:   {'on' if b.get('verify', True) else 'off'} ({b.get('verify_model')})"])
+        f"fact check:   {'on' if b.get('verify', True) else 'off'} ({b.get('verify_model')})",
+        f"engine:       {b.get('engine', 'v1')}   (v1 is today's writer; v2 is the newer one: `tailor-compare N` shows both side by side)",
+        f"v2 options:   gap_policy {b.get('gap_policy', 'omit')}, cover_style {b.get('cover_style', 'evidence')}, tone {b.get('tone', 'direct')}, "
+        f"reviewer {'on' if b.get('reviewer', True) else 'off'} ({b.get('reviewer_model', 'claude-haiku-5-5')}), "
+        f"company_research {'on' if b.get('company_research', True) else 'off'}   (they matter only while the engine is v2)"])
 
 
 # ---------------------------------------------------------------- optional parts, browsing, manual stages
@@ -1081,7 +1141,7 @@ def schedule_changes(args) -> dict:
 
 # The two personal files the scraper container reads from its ./config mount. search.json is not here: it goes into the
 # database with `search-profile apply` (and the dashboard's Search page), the container never reads the file.
-CONFIG_PUSH_FILES = ("profile.json", "resume.json")
+CONFIG_PUSH_FILES = ("profile.json", "resume.json", "proof_points.json")
 
 
 def run_push_config(stack, repo: Path = REPO, dry_run: bool = False) -> str:
@@ -1094,13 +1154,21 @@ def run_push_config(stack, repo: Path = REPO, dry_run: bool = False) -> str:
     for name in CONFIG_PUSH_FILES:
         path = repo / "config" / name
         if not path.is_file():
-            lines.append(f"skipped {name}: {path} does not exist yet (run /setup, or copy config/{name.replace('.json', '.example.json')})")
+            if name != "proof_points.json":              # that one is optional: not having it is not worth a line
+                lines.append(f"skipped {name}: {path} does not exist yet (run /setup, or copy config/{name.replace('.json', '.example.json')})")
             continue
         text = path.read_text(encoding="utf-8")
         try:
             data = json.loads(text)
-            (profile_tools.validate_resume if name == "resume.json" else scoring.validate_profile)(data)
-        except (ValueError, profile_tools.ProfileToolsError, scoring.ProfileError) as e:
+            if name == "proof_points.json":
+                resume_path = repo / "config" / "resume.json"
+                ids = set(tailor.resume_index(json.loads(resume_path.read_text(encoding="utf-8")))) if resume_path.is_file() else set()
+                _, problems = tailor_v2.validate_proof_points(data, ids)
+                if problems:
+                    raise ValueError("; ".join(problems[:3]))
+            else:
+                (profile_tools.validate_resume if name == "resume.json" else scoring.validate_profile)(data)
+        except (ValueError, KeyError, TypeError, profile_tools.ProfileToolsError, scoring.ProfileError) as e:
             raise CheckError(f"{name} does not pass the checks, so nothing was copied: {e} (run `scripts/jobsearch validate`)")
         todo.append((name, text))
     if not todo:
@@ -1517,6 +1585,22 @@ def render_check(res: dict) -> str:
 def validate_config(config_dir: Path) -> tuple[list[str], bool]:
     """Validate whichever of profile/resume/search exist. Returns (report lines, all_valid)."""
     lines, ok = [], True
+    pp = config_dir / "proof_points.json"
+    resume_file = config_dir / "resume.json"
+    if pp.is_file():                                       # optional: the facts behind resume bullets (tailoring v2)
+        try:
+            resume = json.loads(resume_file.read_text(encoding="utf-8")) if resume_file.is_file() else {}
+            ids = set(tailor.resume_index(resume)) if resume else set()
+            points, problems = tailor_v2.validate_proof_points(json.loads(pp.read_text(encoding="utf-8")), ids)
+            if problems:
+                ok = False
+                lines.append(" ✗ proof_points.json:")
+                lines += [f"      - {p}" for p in problems]
+            else:
+                lines.append(f" ✓ proof_points.json: valid ({len(points)} proof point(s))")
+        except (json.JSONDecodeError, OSError, KeyError, TypeError) as e:
+            ok = False
+            lines.append(f" ✗ proof_points.json: could not be read ({type(e).__name__}: {e})")
     for fname, fn in (("profile.json", scoring.validate_profile), ("resume.json", profile_tools.validate_resume),
                       ("search.json", profile_tools.validate_search)):
         path = config_dir / fname
@@ -1575,6 +1659,10 @@ def build_parser() -> argparse.ArgumentParser:
     t = sub.add_parser("tailor", help="tailor one job, or the next eligible ones")
     t.add_argument("job_id", nargs="?", type=int)
     t.add_argument("--limit", type=int, help="how many jobs when no id is given (default: the tailor schedule's batch)")
+
+    tc = sub.add_parser("tailor-compare", help="tailor jobs with two engines side by side into output/compare (saves no application)")
+    tc.add_argument("job_ids", nargs="+", type=int)
+    tc.add_argument("--engines", default="v1,v2", help="comma-separated: v1 (today's writer), v2 (adds the gap policy). Default v1,v2")
 
     sub.add_parser("review", help="applications waiting for your decision")
     for name in ("approve", "skip", "applied"):
@@ -1668,6 +1756,13 @@ def build_parser() -> argparse.ArgumentParser:
     ts.add_argument("--model", help="model for the resume patch and cover letter")
     ts.add_argument("--paper", choices=["a4", "letter"], help="page size of the PDFs")
     ts.add_argument("--style-notes", help="tone and wording preferences, at most 400 characters, or none to clear")
+    ts.add_argument("--engine", choices=["v1", "v2"], help="v1 is today's writer (the default); v2 is the newer one: compare first with `tailor-compare`")
+    ts.add_argument("--gap-policy", choices=["omit", "bridge"], help="v2: omit (the letter never mentions a gap) or bridge ('My closest work is...')")
+    ts.add_argument("--cover-style", choices=["evidence", "classic"], help="v2: the letter's shape")
+    ts.add_argument("--tone", choices=["formal", "direct", "conversational"], help="v2: the letter's tone")
+    ts.add_argument("--reviewer", choices=["on", "off"], help="v2: one more cheap call that proposes edits (the audit decides which are kept)")
+    ts.add_argument("--reviewer-model", help="v2: the model for the reviewer")
+    ts.add_argument("--company-research", choices=["on", "off"], help="v2: up to three plain facts from the employer's own website")
 
     sub.add_parser("push-config", help="copy config/profile.json and resume.json to the server that runs the stack (when you edit them elsewhere)").add_argument(
         "--dry-run", action="store_true", help="only say what would be copied")
@@ -1707,6 +1802,9 @@ def main(argv=None, stack=None, stdin=None) -> int:
             return 0
         if args.cmd == "tailor":
             print(run_tailor(stack, args.job_id, args.limit))
+            return 0
+        if args.cmd == "tailor-compare":
+            print(run_tailor_compare(stack, args.job_ids, [e.strip() for e in args.engines.split(",") if e.strip()]))
             return 0
         if args.cmd == "review":
             print(run_review(stack))
@@ -1814,9 +1912,13 @@ def main(argv=None, stack=None, stdin=None) -> int:
                     else:
                         fields["style_notes"] = " ".join(args.style_notes.split())
                 for key, val in (("mode", args.mode), ("approval", args.approval), ("max_pages", args.max_pages and int(args.max_pages)),
-                                 ("model", args.model), ("paper", args.paper)):
+                                 ("model", args.model), ("paper", args.paper), ("engine", args.engine), ("gap_policy", args.gap_policy),
+                                 ("cover_style", args.cover_style), ("tone", args.tone), ("reviewer_model", args.reviewer_model)):
                     if val is not None:
                         fields[key] = val
+                for key, val in (("reviewer", args.reviewer), ("company_research", args.company_research)):
+                    if val is not None:
+                        fields[key] = val == "on"
                 if args.cover_letter is not None:
                     fields["cover_letter"] = args.cover_letter == "on"
                 if args.verify is not None:

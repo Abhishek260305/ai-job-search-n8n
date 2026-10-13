@@ -160,15 +160,33 @@ def resume_html(view: dict, scale: float = 1.0, paper: str = "a4") -> str:
             f'<body>{"".join(body)}</body></html>')
 
 
+def _cover_paragraphs(paragraphs: list) -> list:
+    """The letter's paragraphs as HTML. A paragraph that starts with "- " is an achievement line: consecutive ones become one bullet list,
+    and the words before the first colon (a short lead phrase) are bold. Everything is escaped."""
+    out, items = [], []
+    for para in paragraphs:
+        if para.startswith("- "):
+            lead, sep, rest = para[2:].partition(":")
+            items.append(f"<li><strong>{e(lead.strip())}:</strong> {e(rest.strip())}</li>" if sep and 0 < len(lead.strip()) <= 70 else f"<li>{e(para[2:])}</li>")
+            continue
+        if items:
+            out.append('<ul class="ach">' + "".join(items) + "</ul>")
+            items = []
+        out.append(f"<p>{e(para)}</p>")
+    if items:
+        out.append('<ul class="ach">' + "".join(items) + "</ul>")
+    return out
+
+
 def cover_letter_html(basics: dict, job: dict, cover: dict, today: str, scale: float = 1.0, paper: str = "a4") -> str:
     body = [f"<h1>{e(basics.get('name'))}</h1>", f'<div class="contact">{_contact_line(basics)}</div>',
             '<div class="cl">', f'<div class="date">{e(today)}</div>']
     if job.get("company"):
         body.append(f"<p>{e(job['company'])}<br>{e(job.get('title'))}</p>")
     body.append(f"<p>{e(cover['greeting'])}</p>")
-    body += [f"<p>{e(p)}</p>" for p in cover["paragraphs"]]
+    body += _cover_paragraphs(cover["paragraphs"])
     body.append(f"<p>{e(cover['closing'])}<br>{e(basics.get('name'))}</p></div>")
-    css = _CSS % {"scale": scale, "paper": _paper_css(paper)}
+    css = _CSS % {"scale": scale, "paper": _paper_css(paper)} + " .ach { margin: 0 0 0.7em 1.2em; padding: 0; } .ach li { margin-bottom: 0.35em; }"
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<title>{e(basics.get("name"))} - Cover letter</title><style>{css} body {{ font-size: calc(10.6pt * var(--s)); line-height: 1.42; }}</style></head>'
             f'<body>{"".join(body)}</body></html>')

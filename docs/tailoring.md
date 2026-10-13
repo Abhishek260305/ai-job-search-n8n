@@ -41,6 +41,41 @@ Anything removed is recorded in `summary.md` and the Telegram message, and flags
 
 What this does **not** guarantee: the checks are strong, not perfect. A model can still phrase something misleadingly in a way no word list or second model catches. Read the documents before you send them.
 
+## Tailoring v2 and comparing the engines
+
+Tailoring has two writers. **v1** is what has always run and is still the default. **v2** is a newer one that writes sharper letters with the same honesty: it can say more of what is true, and it is never allowed to say anything that is not. You choose the engine, after comparing them on your own jobs.
+
+```bash
+scripts/jobsearch tailor-compare 24 31 40                 # both engines, side by side, nothing saved as an application
+scripts/jobsearch tailor-settings set --engine v2          # switch (needs migration 026: scripts/jobsearch migrate)
+scripts/jobsearch tailor-settings set --engine v1          # and back, any time
+```
+
+`tailor-compare` writes, per job, `output/compare/<job>/v1/`, `.../v2/` (the usual files) and a `compare.md` with the two cover letters, headlines and summaries, reworded bullets, requirement coverage, keyword coverage and what the checks found, with the cost of each. It **saves no application, changes no status, sends no message and touches no attempt counter**: you can run it on any job (even one you applied to). It costs a draft per engine (about 5 cents each, priced against your caps first, logged as `tailor_compare` so the Spend page shows it apart). It refuses, having spent nothing, while tailoring is off, while paused, for a scam-blocked job, or while a scheduled run is going. `--engines v2` runs one engine.
+
+**The line does not move.** v2 may emphasise, order, word, quantify and show interest. It never adds an employer, title, date, number, technology or skill that the resume, the profile or your proof points do not support, and never words a skill above the level you gave it. Everything below only makes the audit say no more often, or lets the writing use more of what is true.
+
+### What v2 does
+
+| | |
+|---|---|
+| **Gap policy** (`gap_policy`) | The requirements table is private notes for you. The letter and the summary never state, hint at or apologise for anything you lack, never call you junior or new, never say how long you have worked, and never mention a requirement marked *gap* (nor claim it). `omit` (the default) says nothing; `bridge` adds one "My closest work is..." sentence per important gap, from what you really did. A hedge detector in code ("I should be upfront", "I have not yet", "limited experience", "about a year of professional experience", ...) gives the model one revision and then removes the sentence. Gaps and the closest real work are listed in `summary.md` under "Gaps and bridges", for your interview. |
+| **Proof points** (`config/proof_points.json`) | Optional, gitignored, yours: the facts behind a resume bullet (project, what you did, your role `owned/led/built/contributed/used`, technologies, a metric and **where it can be shown**). A number or metric without evidence is refused: no evidence, no number. The letter may use them, and a rewrite of a bullet may use the proof points of *that* bullet (a metric cannot move to another bullet). Copy `config/proof_points.example.json`, then `scripts/jobsearch validate`. Nothing is written for you: an entry exists only if you wrote it. |
+| **Skill levels** | Your profile's strong / moderate / weak skills decide the wording: only a *strong* skill may be called proficient or expert; a moderate one is "experience with"; a weak one "familiar with". A skill the resume only **lists** (no bullet shows it) is toolkit, not work done: "my work with Kubernetes" is rejected for it. A skill on the resume that your profile does not rank counts as *moderate* (not ranked is not strong). You raise a skill by editing the profile, not by asking the model. |
+| **Ownership and titles** | A rewrite may not use a stronger verb than its bullet (used < contributed < built < led < owned); a letter or summary may not claim "led", "architected" or "owned" if no bullet shows it (a proof point lifts that only for a sentence about *its own* project or technologies; a sentence about the employer is not a claim about you); a title word that is not yours (Senior, Lead, Staff, ...) in the headline, the summary or "I am a ..." is rejected. |
+| **No filler** | A rewrite that only appends generic benefit words ("..., improving reliability and cost control") is sent back to the original bullet. |
+| **A reviewer pass** (`reviewer`, `reviewer_model`) | One more cheap call (Haiku) reads the draft like a hiring manager and proposes up to six edits. **The code decides:** an edit is kept only if the quoted text is really there, it adds no new line and no look-alike letter, **every word it adds already appears in the text, your resume, your profile, your proof points or the job's title and employer** (so it can tighten, not invent: "doubling throughput" or "3 million users" are refused even when the posting says them), and the whole result gets no finding it did not already have. On a resume used as written, only the letter can change. What was applied and what was set aside is in `summary.md`. |
+| **A company angle** (`company_research`) | Up to three plain facts from the employer's **own** website, quoted from its home page and cached 30 days in `company_notes`. The website comes only from the job's own links (a company-board slug or a company-site apply link; never from text in the posting; job boards and applicant-tracking systems do not count), one polite request, no login. A fact is kept only if its quote is really on the page, **every word of it is on the page**, it holds no number, address or "candidate/you/I", and the letter may use at most one; the words of a fact count as the *employer's* (they may be named as its own, never as your experience). The site must end in a usual domain ending, its name must resolve to a public address, only the same host (or its `www.`) is followed on a redirect, and the whole read has a 12-second limit. Most jobs found on LinkedIn have no such link, and then there is no company angle: that is normal. |
+| **The letter** (`cover_style`, `tone`) | `evidence` (the default for v2): an opening that names the employer and the role, two to four achievement lines (each with a short lead, and the numbers exactly as your resume or a proof point states them), and a last paragraph on what you would work on first; 300 to 380 words. `classic` keeps the three paragraphs. `tone` is `formal`, `direct` (default) or `conversational`. Cliches (passionate, leverage, robust, seamless, "proven track record", "I am excited to", ...) are avoided and flagged. The letter never names a city or country. |
+| **Keywords and the page** | `summary.md` lists the posting's terms three ways: said in the tailored text; in your resume but only in a list or a hidden bullet (code then emphasises them in the skills); and technical words the resume does not have at all (gaps, never stuffed in). If the page would need a type size below 92%, the least relevant bullets of the *older* roles are left out first (never the main role, never a role's last bullet), up to three, before the type shrinks further. |
+| **Smaller fixes (both engines)** | A sentence that points back at a removed one ("That is why...") is removed with it. A requirement the model marked matched or bridged without citing a real bullet is shown as a *gap* instead of failing the whole answer. A requirement may cite `education` (a degree) or `skills` (listed only: bridged at most). |
+
+### Cost and safety
+
+v2 adds up to three small calls: the reviewer (about a cent), the company note (a fraction of a cent, once a month per company) and, as before, the fact check. A real comparison of six jobs cost about 6 to 7 cents per job per engine, v2 slightly less than v1 because it needs fewer revisions. Every call is priced at its worst case first, logged under its own purpose (`tailor_review`, `tailor_company`, `tailor_verify`, and `tailor_compare...` for comparisons), counted against the same daily and monthly caps and stopped by the pause; none of it touches a Claude subscription. If the reviewer or the company note cannot run, tailoring goes on without it. The settings are in the database and are changed with the CLI only (the dashboard cannot change the engine, like the model and the approval mode).
+
+What v2 will not do: add a skill, tool, employer, title, date, degree, number or year you do not have; word a skill above its level; use a metric that has no evidence; use a company fact it did not find on the company's own site; hide a gap from *you* (gaps stay in the table, `summary.md` and the Telegram note).
+
 ## Settings
 
 Stored in the database; change them any time. Your defaults are `mode auto`, `approval review`.
@@ -58,6 +93,12 @@ Stored in the database; change them any time. Your defaults are `mode auto`, `ap
 | `style_notes` | text, at most 400 characters, or none | your tone and wording preferences for the writing, for example "Warm but formal. Short sentences." They are placed in the prompt as preferences that cannot override the honesty rules, the output format or the writing rules, and the audit and fact check run as always, so they can never make the writing add a claim your resume does not support. |
 | `verify` | on / off | the Haiku fact check (recommended). |
 | `model` | model id | default `claude-sonnet-5-5`. |
+| `engine` | `v1` / `v2` | the writer (see above). Default `v1`. |
+| `gap_policy` | `omit` / `bridge` | v2 only. Default `omit`. |
+| `cover_style` | `evidence` / `classic` | v2 only. Default `evidence`. |
+| `tone` | `formal` / `direct` / `conversational` | v2 only. Default `direct`. |
+| `reviewer`, `reviewer_model` | on / off, model id | v2 only: the reviewer pass. Default on, Haiku. |
+| `company_research` | on / off | v2 only: the company angle. Default on. |
 
 ```bash
 scripts/jobsearch tailor-settings                                    # show

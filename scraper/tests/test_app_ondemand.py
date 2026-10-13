@@ -431,3 +431,20 @@ def test_the_fact_check_call_is_part_of_the_most_it_can_cost_and_a_dear_checker_
     cheap = env(b).get("/tailor/estimate?job_id=7").json()["at_most_usd"]
     dear = env(c).get("/tailor/estimate?job_id=7").json()["at_most_usd"]
     assert base < cheap < dear
+
+
+# ---- the "at most" the user agrees to counts the v2 engine's extra calls
+
+def test_the_estimate_for_the_v2_engine_includes_the_reviewer_and_the_company_note(env):
+    base = env().get("/tailor/estimate?job_id=7").json()["at_most_usd"]
+    s2 = Store(); s2.settings.update(engine="v2", reviewer=True, company_research=True)
+    with_v2 = env(s2).get("/tailor/estimate?job_id=7").json()["at_most_usd"]
+    s3 = Store(); s3.settings.update(engine="v2", reviewer=False, company_research=False)
+    bare = env(s3).get("/tailor/estimate?job_id=7").json()["at_most_usd"]
+    assert with_v2 > bare >= base > 0
+
+
+def test_an_invalid_engine_in_the_settings_is_a_clear_refusal_not_a_crash(env):
+    s = Store(); s.settings["engine"] = "v9"
+    body = env(s).get("/tailor/estimate?job_id=7").json()
+    assert body["can_run"] is False and "tailoring settings are not valid" in body["reason"]

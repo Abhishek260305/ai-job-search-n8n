@@ -1,0 +1,15 @@
+{
+  "_comment": "Optional. Copy to config/proof_points.json (gitignored) and fill in YOUR OWN facts. Each proof point belongs to one bullet of config/resume.json (its id) and gives the project, what you did, your role (owned, led, built, contributed or used), the technologies, and where the numbers can be shown (evidence: a link, a document, or 'can show in an interview'). A number or a metric without evidence is refused: no evidence, no number. Tailoring v2 may use these facts in a cover letter and in a rewrite of THAT bullet; it never invents any. Check the file with: scripts/jobsearch validate",
+  "proof_points": [
+    {
+      "id": "pp-1",
+      "bullet": "w1-b1",
+      "project": "Caching layer redesign",
+      "role": "built",
+      "what": "Replaced a per-request lookup with a two-level cache and added invalidation on writes.",
+      "metric": "p95 API latency from 900ms to 220ms",
+      "tech": ["Python", "Redis"],
+      "evidence": "dashboard screenshot and the pull request, can show in an interview"
+    }
+  ]
+}

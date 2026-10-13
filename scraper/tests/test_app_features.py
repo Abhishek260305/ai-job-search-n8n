@@ -722,3 +722,39 @@ def test_digest_sent_from_the_old_workflow_sends_only_ids_and_touches_no_mail(en
     store.gmail_digest_sent = lambda ids, login=False: store.mail_marked.append((ids, login)) or 0
     body = env(store).post("/digest/sent", json={"ids": [4]}).json()
     assert body == {"marked": 1, "mail_marked": 0} and store.mail_marked == []
+
+
+# ---- tailoring v2 settings (migration 026) and proof points
+
+def test_the_v2_settings_are_parsed_like_the_others():
+    import telegram_bot as TB
+    assert TB.normalise_settings({"engine": "v2", "gap_policy": "bridge", "cover_style": "classic", "tone": "conversational",
+                                  "reviewer": False, "company_research": True, "reviewer_model": "claude-haiku-5-5"}) == {
+        "engine": "v2", "gap_policy": "bridge", "cover_style": "classic", "tone": "conversational", "reviewer": False,
+        "company_research": True, "reviewer_model": "claude-haiku-5-5"}
+    for bad in ({"engine": "v3"}, {"gap_policy": "hide"}, {"cover_style": "fancy"}, {"tone": "rude"}, {"reviewer": "maybe"}, {"reviewer_model": "x"}, {"company_research": "perhaps"}):
+        with pytest.raises(ValueError):
+            TB.normalise_settings({k: (v if not isinstance(v, bool) else v) for k, v in bad.items()})
+    assert "engine: v1" in TB.settings_text({"mode": "auto", "approval": "review", "min_score": None, "max_score": None, "daily_limit": None,
+                                             "cover_letter": True, "max_pages": 1, "model": "m"})
+    assert "engine: v2" in TB.settings_text({"mode": "auto", "approval": "review", "min_score": None, "max_score": None, "daily_limit": None,
+                                             "cover_letter": True, "max_pages": 1, "model": "m", "engine": "v2"})
+
+
+def test_proof_points_are_loaded_validated_and_a_bad_file_never_stops_tailoring(tmp_path, monkeypatch):
+    resume = {"work": [{"id": "w1", "highlights": [{"id": "w1-b1", "text": "Built X."}]}]}
+    path = tmp_path / "proof_points.json"
+    monkeypatch.setenv("PROOF_POINTS_PATH", str(path))
+    assert A._load_proof_points(resume) == []                                                          # no file: none
+    path.write_text("{not json")
+    assert A._load_proof_points(resume) == []                                                          # unreadable: none, not an error
+    good = {"id": "pp-1", "bullet": "w1-b1", "project": "P", "role": "built", "what": "Did X.", "metric": "", "tech": [], "evidence": ""}
+    path.write_text(json.dumps({"proof_points": [good, dict(good, id="pp-2", bullet="w9-b9")]}))
+    assert [p["id"] for p in A._load_proof_points(resume)] == ["pp-1"]                                  # the valid one is kept, the other is logged and skipped
+
+
+def test_a_proof_points_file_that_is_not_utf8_never_stops_tailoring(tmp_path, monkeypatch):
+    path = tmp_path / "proof_points.json"
+    path.write_bytes(b"{\xff\xfe not utf-8")
+    monkeypatch.setenv("PROOF_POINTS_PATH", str(path))
+    assert A._load_proof_points({"work": []}) == []

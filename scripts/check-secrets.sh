@@ -37,7 +37,7 @@ echo "$files" | while IFS= read -r f; do
     .env.example) ;;
     .env|.env.*|*/.env|*/.env.*) echo "FILE $f: an environment file (it holds your secrets)" ;;
     *.pem|*.key|*.p12|*.pfx|*.ppk|*id_rsa*|*id_ed25519*|*id_ecdsa*|*ssh-key-*|*.kdbx) echo "FILE $f: a key or credential file" ;;
-    config/profile.json|config/resume.json|config/search.json|config/search.json.before-pull*|config/.draft/*) echo "FILE $f: your personal config" ;;
+    config/profile.json|config/resume.json|config/proof_points.json|config/search.json|config/search.json.before-pull*|config/.draft/*) echo "FILE $f: your personal config" ;;
     output/*|documents/*) echo "FILE $f: your generated applications or documents" ;;
     backups/*|*.sql.gz|*backup*.sql|*.dump) echo "FILE $f: a database backup (it holds your data)" ;;
     postgres/*.sql) ;;

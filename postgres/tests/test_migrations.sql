@@ -2842,5 +2842,32 @@ BEGIN
            WHERE p.proname IN ('dashboard_email_inbox', 'dashboard_email_count', 'dashboard_email_accept', 'dashboard_email_dismiss', 'dashboard_email_restore')), 'security definer with a pinned search_path';
 END $$;
 
+DO $$
+BEGIN
+  -- 026 (tailoring v2): the defaults change nothing, the values are checked, and the cache is not the dashboard's business
+  ASSERT (SELECT engine = 'v1' AND gap_policy = 'omit' AND cover_style = 'evidence' AND tone = 'direct' AND reviewer AND reviewer_model = 'claude-haiku-5-5' AND company_research
+            FROM tailor_settings WHERE id = 1), 'the v2 settings default to engine v1 and the documented choices';
+  BEGIN UPDATE tailor_settings SET engine = 'v3'; RAISE EXCEPTION 'engine accepted v3'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE tailor_settings SET gap_policy = 'hide'; RAISE EXCEPTION 'gap_policy accepted hide'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE tailor_settings SET cover_style = 'fancy'; RAISE EXCEPTION 'cover_style accepted fancy'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE tailor_settings SET tone = 'rude'; RAISE EXCEPTION 'tone accepted rude'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN UPDATE tailor_settings SET reviewer_model = 'two words'; RAISE EXCEPTION 'reviewer_model accepted a bad name'; EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE tailor_settings SET engine = 'v2', gap_policy = 'bridge', cover_style = 'classic', tone = 'formal', reviewer = false, company_research = false, reviewer_model = 'claude-haiku-5-5';
+  ASSERT (SELECT engine = 'v2' AND NOT reviewer AND NOT company_research FROM tailor_settings WHERE id = 1), 'the v2 settings can be changed';
+  UPDATE tailor_settings SET engine = 'v1', gap_policy = 'omit', cover_style = 'evidence', tone = 'direct', reviewer = true, company_research = true;
+
+  INSERT INTO company_notes (company_key, facts, source_url) VALUES ('acme', '["Acme builds payment software."]', 'https://acme.com/');
+  ASSERT (SELECT count(*) FROM company_notes WHERE company_key = 'acme') = 1 AND (SELECT fetched_at > now() - interval '1 minute' FROM company_notes WHERE company_key = 'acme'), 'a note is stored and stamped';
+  BEGIN INSERT INTO company_notes (company_key, facts) VALUES ('four', '["a","b","c","d"]'); RAISE EXCEPTION 'four facts accepted'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO company_notes (company_key, facts) VALUES ('obj', '{"a": 1}'); RAISE EXCEPTION 'a non-list accepted'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO company_notes (company_key, facts) VALUES ('', '[]'); RAISE EXCEPTION 'an empty key accepted'; EXCEPTION WHEN check_violation THEN NULL; END;
+  BEGIN INSERT INTO company_notes (company_key, facts, source_url) VALUES ('long', '[]', repeat('x', 301)); RAISE EXCEPTION 'a long url accepted'; EXCEPTION WHEN check_violation THEN NULL; END;
+  SET LOCAL ROLE jobsearch_dashboard;
+  BEGIN PERFORM 1 FROM company_notes; RAISE EXCEPTION 'the dashboard role read the company notes'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN UPDATE tailor_settings SET engine = 'v2'; RAISE EXCEPTION 'the dashboard role changed the engine'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  RESET ROLE;
+  ASSERT NOT has_table_privilege('public', 'company_notes', 'SELECT'), 'PUBLIC cannot read the company notes';
+END $$;
+
 ROLLBACK;
 \echo ALL SQL TESTS PASSED

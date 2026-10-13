@@ -144,8 +144,6 @@ def test_unknown_keys_are_dropped():
     (lambda p: p["skills"].update(emphasize=["Kafka"]), "not skills in the resume"),
     (lambda p: p["projects"].update(include=["p9"]), "unknown ids"),
     (lambda p: p["requirements"][0].update(status="maybe"), "status"),
-    (lambda p: p["requirements"][0].update(evidence=None), "needs a real bullet id"),
-    (lambda p: p["requirements"][0].update(evidence="w9-b9"), "needs a real bullet id"),
     (lambda p: p["cover_letter"].update(paragraphs=["only one"]), "paragraphs"),
     (lambda p: p["cover_letter"].update(paragraphs=["word " * 150] * 3), "longer than"),
     (lambda p: p.pop("cover_letter"), "cover_letter: required"),
@@ -534,3 +532,382 @@ def test_prepare_passes_the_notes_to_the_system_prompt_only():
     p = T.prepare(RESUME, PROFILE, JOB, style_notes="Be concise.")
     assert "Be concise." in p["system"] and "Be concise." not in p["user"]
     assert "USER STYLE" not in T.prepare(RESUME, PROFILE, JOB)["system"]
+
+
+# ------------------------------------------------------------------ v2: engines and the gap policy (plan T1)
+
+def aud2(patch):
+    return T.audit(RESUME, patch, JOB, PROFILE, engine="v2")
+
+
+def test_the_default_engine_is_v1_and_unknown_values_are_errors_not_guesses():
+    assert T.engine_options(None) == ("v1", "omit") and T.engine_options({}) == ("v1", "omit")
+    assert T.engine_options({"engine": "v2", "gap_policy": "bridge"}) == ("v2", "bridge")
+    for bad in ({"engine": "v3"}, {"engine": "V2"}, {"gap_policy": "hide"}):
+        with pytest.raises(ValueError):
+            T.engine_options(bad)
+    with pytest.raises(ValueError):
+        T.build_system(RESUME, PROFILE, engine="v3")
+
+
+def test_the_v1_prompt_is_what_it_always_was():
+    s = T.build_system(RESUME, PROFILE)
+    assert s == T.build_system(RESUME, PROFILE, engine="v1") and "GAP POLICY" not in s and "private notes" not in s
+    assert s.count("Never hide a gap.") == 1 and "say so plainly" in s
+    assert T.prepare(RESUME, PROFILE, JOB)["system"] == T.prepare(RESUME, PROFILE, JOB, engine="v1", gap_policy="bridge")["system"]    # policy is a v2 notion
+
+
+def test_the_v2_prompt_says_the_table_is_private_and_the_letter_never_confesses():
+    s = T.build_system(RESUME, PROFILE, engine="v2")
+    assert "GAP POLICY" in s and "private notes for the candidate" in s and "Never hide a gap" in s     # the table stays honest
+    for phrase in ("I have not", "not yet", "limited experience", "I should be upfront", "unfortunately", "although I"):
+        assert phrase in s                                      # the model is told exactly what not to write
+    assert "Do not mention a requirement marked gap at all" in s and "do not claim it either" in s
+    assert s.startswith(T.build_system(RESUME, PROFILE, engine="v2")[:200]) and RESUME["basics"]["name"] in s
+
+
+def test_the_two_gap_policies_differ_only_in_what_they_allow_for_bridges():
+    omit, bridge = T.build_system(RESUME, PROFILE, engine="v2"), T.build_system(RESUME, PROFILE, engine="v2", gap_policy="bridge")
+    assert omit != bridge and "My closest work is" in bridge and "My closest work is" not in omit
+    assert "marked gap is not mentioned and not claimed" in bridge and "Do not mention a requirement marked gap" in omit
+
+
+def test_the_v2_prompt_applies_with_or_without_a_cover_letter_and_in_cover_only_mode():
+    for kw in ({"cover_letter": False}, {"mode": "cover_only"}):
+        assert "GAP POLICY" in T.build_system(RESUME, PROFILE, engine="v2", **kw)
+
+
+def test_the_v2_prompt_is_stable_across_jobs_for_caching():
+    a = T.prepare(RESUME, PROFILE, JOB, engine="v2")["system"]
+    b = T.prepare(RESUME, PROFILE, dict(JOB, title="Other", company="Other Inc"), engine="v2")["system"]
+    assert a == b
+
+
+HEDGED = [
+    "I should be upfront that I have about a year of professional experience and have not yet built evaluation harnesses or worked directly with enterprise customers.",
+    "To be honest, I have never run Kafka in production.",
+    "I haven't worked with Kafka.", "I have not used Kubernetes at that scale.", "I lack a formal background in distributed systems.",
+    "I have limited experience with Rust.", "I have no experience with Kafka.", "I have little exposure to enterprise sales.",
+    "Unfortunately my team never used Terraform.", "I have not yet built evaluation harnesses.", "I have yet to lead a team.",
+    "As an early-career engineer I enjoy production work.", "I am an entry-level engineer who ships.", "As a recent graduate I built services.",
+    "I am still learning the ecosystem.", "With one year of experience in production Go, I run services at scale.",
+    "I bring about a year of professional experience.", "Only a year into my career, I built a gateway.", "I am new to the industry but fast.",
+    "Although I am new to Kafka, I learn quickly.", "Despite my limited background I shipped a platform.",
+    "There are gaps in my experience with enterprise customers.", "My limited exposure to Kafka is the one gap.",
+    "I don't have Kafka experience.", "The role is a stretch because I lack evaluation experience.",
+    # what the first review found missing: a skill name inside the phrase, "is limited", "not an expert", curly apostrophes
+    "I have no Go experience.", "I have no direct Go experience.", "My Go experience is limited.", "I have minimal Go exposure.",
+    "I am not an expert in Go.", "I am unfamiliar with Go.", "I am relatively new to Kubernetes.", "Go is new to me.",
+    "I'm still getting up to speed on Terraform.", "I am a junior engineer.", "I\u2019ve never used Go.", "I haven\u2019t used Go in production.",
+    "I don\u2019t have Kafka experience.",
+    # one sentence only a single pattern catches (test_every_hedge_pattern_has_a_sentence_only_it_catches keeps this list honest)
+    "I should be clear about the scope of my role.", "To be frank, the migration was hard.", "I am lacking professional experience in sales.",
+    "I am not yet familiar with the tooling.", "Kafka is not yet part of my toolkit.", "Regrettably the project was cancelled.",
+    "Despite having a short track record, I shipped it.", "My lack of Kafka work is the one open item.", "Early in my career I built the gateway.",
+    "As a fresher I shipped a gateway.", "I am starting out in infrastructure.", "I should mention I'm still new.",
+    "My career is just a year old.",
+]
+CLEAN = [
+    "I would bring strong backend ownership, fast learning, and a clear wish to grow into that work with your team in Mumbai.",
+    "At Acme I built a multi-tenant probe orchestration system in Go that runs across 7+ LLM engines.",
+    "Just over a year ago I built the gateway.", "Over the last year I shipped three services.",
+    "I have built idempotent billing and I have owned the gateway end to end.", "I can't wait to build this with your team.",
+    "I am applying for the role because I enjoy reliability work.", "I would welcome the chance to help your team with its Kubernetes services.",
+    "My closest work is the MCP server, which lets Claude query product metrics.", "I enjoy learning new systems quickly.",
+    "The tool cut 20 polls per minute to zero.", "I led the migration of 40 services.",
+    # what the first review showed would be wrongly removed: negation about something else, a duration that is a boast, other people
+    "I don't wait for tickets, I fix the cause.", "I do not just ship features, I own them.", "I have never missed a release date.",
+    "I haven't left a pager alert unacknowledged.", "I did not rely on vendors.", "I didn't stop at the fix.",
+    "For about 3 years I ran the Kafka cluster.", "In just 6 months I cut the build time.", "I ran it for nearly 3 years without a Sev1.",
+    "I lacked visibility into costs, so I built a dashboard.", "I mentored teammates with no experience in Go.",
+    "I coached engineers with little experience in Kubernetes.", "Zero manual intervention and no downtime across 40 deploys.",
+    "A gap analysis of the billing flow cut refunds.", "With 5 years of experience in Go, I run services at scale.",
+]
+
+
+@pytest.mark.parametrize("sentence", HEDGED)
+def test_the_hedge_detector_catches_confessions_apologies_and_volunteered_seniority(sentence):
+    assert T.gap_disclosures(sentence), sentence
+
+
+@pytest.mark.parametrize("sentence", CLEAN)
+def test_the_hedge_detector_leaves_confident_true_sentences_alone(sentence):
+    assert T.gap_disclosures(sentence) == [], T.gap_disclosures(sentence)
+
+
+def test_every_hedge_pattern_has_a_sentence_only_it_catches():
+    for i, pattern in enumerate(T._HEDGES):
+        alone = [s for s in HEDGED if [j for j, p in enumerate(T._HEDGES) if p.search(s)] == [i]]
+        assert alone, f"no test sentence is caught by pattern {i} alone: {pattern.pattern}"
+
+
+def test_each_hit_is_the_phrase_as_written_and_one_hit_per_sentence():
+    text = "I built the gateway. I should be upfront that I have not yet led a team. Unfortunately I never used Kafka."
+    hits = T.gap_disclosures(text)
+    assert len(hits) == 2 and hits[0] == "I should be upfront" and hits[1] == "Unfortunately"
+    assert all(h in text for h in hits)
+
+
+def test_v2_audit_rejects_a_letter_that_volunteers_a_weakness_but_v1_does_not():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][2] = HEDGED[0]
+    assert aud(p).ok                                         # v1: exactly as before
+    a = aud2(p)
+    assert not a.ok
+    hit = [v for v in a.hard if v["kind"] == "gap_disclosure"]
+    assert hit and hit[0]["where"] == "cover letter paragraph 3" and "never mention gaps" in hit[0]["detail"]
+
+
+def test_v2_audit_rejects_a_summary_that_hedges():
+    p = T.validate_patch(good(), RESUME)
+    p["summary"] = "Early-career backend engineer who builds multi-tenant platforms in Go."
+    a = aud2(p)
+    assert [v for v in a.hard if v["where"] == "summary" and v["kind"] == "gap_disclosure"]
+    assert aud(p).ok
+
+
+def test_the_good_patch_passes_the_v2_audit_untouched():
+    a = aud2(T.validate_patch(good(), RESUME))
+    assert a.ok and a.hard == [], a.hard
+
+
+def test_repair_removes_the_confessing_sentence_and_keeps_the_rest():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][2] = ("I would bring strong backend ownership. I should be upfront that I have not yet built evaluation harnesses. "
+                                          "I want to grow into that work with your team.")
+    repaired, notes = T.repair(p, aud2(p))
+    para = repaired["cover_letter"]["paragraphs"][2]
+    assert "upfront" not in para and "evaluation harnesses" not in para
+    assert para == "I would bring strong backend ownership. I want to grow into that work with your team."
+    assert any("removed 1 unsupported sentence" in n for n in notes)
+    assert aud2(repaired).ok
+
+
+def test_repair_drops_a_summary_that_hedges():
+    p = T.validate_patch(good(), RESUME)
+    p["summary"] = "Backend engineer with limited experience in Go."
+    repaired, notes = T.repair(p, aud2(p))
+    assert repaired["summary"] is None and aud2(repaired).ok
+
+
+def test_a_hedge_in_every_sentence_of_a_paragraph_removes_the_paragraph():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][1] = "Unfortunately I have little exposure to this. I have not worked with it."
+    repaired, _ = T.repair(p, aud2(p))
+    assert len(repaired["cover_letter"]["paragraphs"]) == 2 and aud2(repaired).ok
+
+
+def test_a_hedge_that_hides_in_a_rewritten_bullet_is_not_this_checks_business():
+    # bullets are held to the resume by the word, number and years checks; the gap policy is about the letter and the summary
+    p = T.validate_patch(good(), RESUME)
+    assert aud2(p).ok
+
+
+def test_the_audit_still_does_everything_it_did_under_v2():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][0] += " I have used Terraform for years at Acme."
+    a = aud2(p)
+    assert any(v["kind"] == "term" and v["token"] == "Terraform" for v in a.hard)
+    p2 = T.validate_patch(good(), RESUME)
+    p2["summary"] = "Engineer with 9 years of experience."
+    assert any(v["kind"] == "years" for v in aud2(p2).hard)
+
+
+def test_a_seniority_phrase_that_is_part_of_the_jobs_own_title_is_not_a_confession():
+    for sentence, title in [("I am applying for the Entry-Level Backend Engineer role.", "Entry-Level Backend Engineer"),
+                            ("I am applying to the Early Career Data Engineer program.", "Early Career Data Engineer"),
+                            ("I would join as a New Graduate Software Engineer.", "New Graduate Software Engineer")]:
+        assert T.gap_disclosures(sentence, title) == [] and T.gap_disclosures(sentence)             # only the job's own words are excused
+    assert T.gap_disclosures("As an entry-level engineer I ship.", "Entry-Level Backend Engineer")  # but describing the candidate that way is not
+
+
+def test_curly_apostrophes_are_found_and_come_back_as_written():
+    hits = T.gap_disclosures("I built it. I haven\u2019t used Go in production.")
+    assert hits == ["I haven\u2019t used"]
+
+
+def test_repair_removes_a_sentence_whose_hit_has_a_curly_apostrophe():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][2] = "I would bring strong ownership. I haven\u2019t used Go in production. I want to grow with your team."
+    repaired, _ = T.repair(p, aud2(p))
+    assert repaired["cover_letter"]["paragraphs"][2] == "I would bring strong ownership. I want to grow with your team." and aud2(repaired).ok
+
+
+def test_the_v2_audit_also_reads_the_headline_and_the_greeting():
+    p = T.validate_patch(good(), RESUME)
+    p["headline"] = "Junior Backend Engineer"
+    p["cover_letter"]["greeting"] = "Dear Hiring Manager, I am a junior engineer,"
+    wheres = {v["where"] for v in aud2(p).hard if v["kind"] == "gap_disclosure"}
+    assert wheres == {"headline", "cover letter greeting"} and aud(p).ok            # v1 does not care
+    repaired, _ = T.repair(p, aud2(p))
+    assert repaired["headline"] is None and repaired["cover_letter"]["greeting"] == "Dear Hiring Manager," and aud2(repaired).ok
+
+
+def test_the_audit_uses_the_jobs_title_for_the_exception():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][0] = "I am applying for the Entry-Level Backend Engineer role at Globex."
+    assert not aud2(p).ok                                                                # the job here is a Senior Backend Engineer
+    job = dict(JOB, title="Entry-Level Backend Engineer")
+    assert [v for v in T.audit(RESUME, p, job, PROFILE, engine="v2").hard if v["kind"] == "gap_disclosure"] == []
+
+
+@pytest.mark.parametrize("summary", ["Backend engineer with limited experience in Go.", "Engineer who lacks production experience.",
+                                     "Junior backend engineer building services in Go.", "Backend engineer with no exposure to Kafka."])
+def test_a_summary_or_headline_has_no_i_so_its_confessions_need_no_first_person(summary):
+    assert T.gap_disclosures(summary, implied_subject=True) and not T.gap_disclosures(summary)        # only a summary is read this way
+
+
+def test_a_summary_that_boasts_is_left_alone():
+    for ok in ("Backend engineer who builds multi-tenant platforms in Go and PostgreSQL.", "Built a platform handling 50,000+ executions a year.",
+               "Engineer with no downtime across 40 deploys.", "Platform engineer who removes manual toil."):
+        assert T.gap_disclosures(ok, implied_subject=True) == [], ok
+
+
+# ------------------------------------------------------------------ T1b: three fixes the first real comparison asked for
+
+@pytest.mark.parametrize("bad", [None, "w9-b9", "", 7, ["w1-b1"]])
+def test_a_matched_or_bridged_requirement_with_no_real_bullet_becomes_a_gap_instead_of_failing_the_answer(bad):
+    for status in ("matched", "bridged"):
+        p = good()
+        p["requirements"][0].update(status=status, evidence=bad, note="strong Go work")
+        out = T.validate_patch(p, RESUME)            # used to raise: "a matched requirement needs a real bullet id"
+        r = out["requirements"][0]
+        assert r["status"] == "gap" and r["evidence"] is None
+        assert r["note"] == "strong Go work (no real bullet was cited, so this is shown as a gap)"
+        assert len(out["requirements"]) == 2          # the row is kept, not dropped
+
+
+def test_a_downgraded_requirement_with_no_note_gets_a_plain_one_and_a_real_bullet_is_untouched():
+    p = good()
+    p["requirements"][0].update(evidence="w9-b9", note="")
+    assert T.validate_patch(p, RESUME)["requirements"][0]["note"] == "(no real bullet was cited, so this is shown as a gap)"
+    ok = T.validate_patch(good(), RESUME)["requirements"][0]
+    assert ok["status"] == "matched" and ok["evidence"] == "w1-b1" and "no real bullet" not in ok["note"]
+
+
+def test_other_requirement_mistakes_still_fail_the_answer():
+    for mut, expect in [(lambda p: p["requirements"][0].update(status="great"), "status: must be one of"),
+                        (lambda p: p["requirements"][0].update(requirement=""), "requirement: required text")]:
+        p = good()
+        mut(p)
+        with pytest.raises(T.TailorError, match=expect):
+            T.validate_patch(p, RESUME)
+
+
+def test_the_v2_prompt_names_the_employer_first_and_keeps_places_out_of_the_letter():
+    s = T.build_system(RESUME, PROFILE, engine="v2")
+    assert "OPENING AND PLACE" in s and "names the employer and the role" in s and "Do not mention any city, country or work location" in s
+    assert 'do not start a sentence with "That", "This"' in s
+    assert "OPENING AND PLACE" not in T.build_system(RESUME, PROFILE) and "OPENING AND PLACE" not in T.build_system(RESUME, PROFILE, engine="v2", cover_letter=False)
+
+
+def test_a_city_from_the_postings_location_line_is_a_soft_note_under_v2_not_an_invented_name():
+    job = dict(JOB, location="Mumbai, Maharashtra, India")
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][0] += " I would be glad to work from Mumbai."
+    v1 = T.audit(RESUME, p, job, PROFILE)
+    v2 = T.audit(RESUME, p, job, PROFILE, engine="v2")
+    assert any(v["token"] == "Mumbai" for v in v1.hard)                                  # v1 is unchanged: hard
+    assert not any(v["token"] == "Mumbai" for v in v2.hard) and any(v["token"] == "Mumbai" for v in v2.soft)
+
+
+def test_a_letter_that_never_names_the_employer_is_flagged_softly_under_v2():
+    p = T.validate_patch(good(), RESUME)
+    assert not [v for v in aud2(p).soft if v["kind"] == "employer"]                    # "Globex" is in the good letter
+    p["cover_letter"]["paragraphs"] = [x.replace("Globex", "your company") for x in p["cover_letter"]["paragraphs"]]
+    a = aud2(p)
+    assert a.ok and [v for v in a.soft if v["kind"] == "employer" and v["where"] == "cover letter"]
+    assert not [v for v in aud(p).soft if v["kind"] == "employer"]                      # v1 does not ask
+
+
+@pytest.mark.parametrize("company,named", [("Globex", True), ("Globex Pvt Ltd", True), ("The Globex Group", True), ("Acme Technologies", False), ("Inc", True)])
+def test_the_employer_check_uses_a_distinctive_word_of_the_name(company, named):
+    assert T._names_employer("I would like to join Globex as an engineer.", company) is named
+
+
+def test_repair_removes_a_sentence_that_points_back_at_one_that_was_removed():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][0] = ("Sarvam's model APIs run on Terraform, which I used for years. That is the kind of system I want to own. "
+                                          "At Acme I build backend infrastructure in Go.")
+    fixed, notes = T.repair(p, aud2(p))
+    assert fixed["cover_letter"]["paragraphs"][0] == "At Acme I build backend infrastructure in Go."
+    assert any("1 sentence(s) that referred back to a removed one" in n for n in notes) and aud2(fixed).ok
+
+
+@pytest.mark.parametrize("pointer", ["That", "This", "These results", "Those", "Such work", "Doing so"])
+def test_every_way_of_pointing_back_is_caught(pointer):
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][1] = f"I wrote Terraform modules. {pointer} matters to me. I also built the gateway."
+    fixed, _ = T.repair(p, aud(p))
+    assert fixed["cover_letter"]["paragraphs"][1] == "I also built the gateway."
+
+
+def test_a_sentence_after_a_removed_one_is_kept_when_it_does_not_point_back():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][1] = "I wrote Terraform modules. At Acme I built a platform. It scaled well."
+    fixed, notes = T.repair(p, aud(p))
+    assert fixed["cover_letter"]["paragraphs"][1] == "At Acme I built a platform. It scaled well." and not any("referred back" in n for n in notes)
+
+
+def test_the_chain_of_pointers_continues_across_a_paragraph_boundary():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][0] = "I know Terraform very well."                       # the whole paragraph is removed
+    p["cover_letter"]["paragraphs"][1] = "That is why I applied. At Acme I built a platform."
+    fixed, notes = T.repair(p, aud(p))
+    assert fixed["cover_letter"]["paragraphs"][0] == "At Acme I built a platform." and len(fixed["cover_letter"]["paragraphs"]) == 2
+    assert any("referred back" in n for n in notes)
+
+
+def test_a_pointer_after_a_kept_sentence_is_fine_because_what_it_points_at_is_still_there():
+    p = T.validate_patch(good(), RESUME)
+    p["cover_letter"]["paragraphs"][1] = "I wrote Terraform modules. At Acme I built a platform. That platform scaled well. This mattered to tenants."
+    fixed, notes = T.repair(p, aud(p))
+    assert fixed["cover_letter"]["paragraphs"][1] == "At Acme I built a platform. That platform scaled well. This mattered to tenants."
+    assert not any("referred back" in n for n in notes)
+
+
+# ------------------------------------------------------------------ the degree and the skills list as evidence (found in the second comparison)
+
+def test_a_degree_can_be_cited_as_education_and_stays_matched():
+    p = good()
+    p["requirements"][0].update(requirement="Bachelor's degree in computer science", status="matched", evidence="education", note="B.Tech in CS")
+    r = T.validate_patch(p, RESUME)["requirements"][0]
+    assert r["status"] == "matched" and r["evidence"] == "education" and r["note"] == "B.Tech in CS"
+
+
+def test_something_only_listed_under_skills_is_bridged_at_most_and_says_why():
+    p = good()
+    p["requirements"][0].update(requirement="Kubernetes", status="matched", evidence="skills", note="listed")
+    r = T.validate_patch(p, RESUME)["requirements"][0]
+    assert r["status"] == "bridged" and r["evidence"] == "skills" and r["note"] == "listed (only listed under skills, so shown as bridged, not matched)"
+    p["requirements"][0].update(status="bridged")
+    assert T.validate_patch(p, RESUME)["requirements"][0]["status"] == "bridged" and "only listed" not in T.validate_patch(p, RESUME)["requirements"][0]["note"]
+
+
+@pytest.mark.parametrize("section", ["education", "skills"])
+def test_a_section_the_resume_does_not_have_is_not_evidence(section):
+    p = good()
+    p["requirements"][0].update(status="matched", evidence=section, note="")
+    p["skills"] = {"order": [], "emphasize": []}                 # the patch must not mention groups the thin resume lacks
+    thin = dict(RESUME, **{section: []})
+    r = T.validate_patch(p, thin)["requirements"][0]
+    assert r["status"] == "gap" and r["evidence"] is None and "no real bullet" in r["note"]
+
+
+def test_other_section_names_are_still_not_evidence():
+    for bad in ("work", "projects", "Education", "skills "):
+        p = good()
+        p["requirements"][0].update(status="bridged", evidence=bad, note="")
+        assert T.validate_patch(p, RESUME)["requirements"][0]["status"] == "gap"
+
+
+def test_a_gap_still_carries_no_evidence_even_if_the_model_gave_one():
+    p = good()
+    p["requirements"][1].update(status="gap", evidence="education")
+    assert T.validate_patch(p, RESUME)["requirements"][1]["evidence"] is None
+
+
+def test_only_the_v2_prompt_teaches_the_two_section_names():
+    v2, v1 = T.build_system(RESUME, PROFILE, engine="v2"), T.build_system(RESUME, PROFILE)
+    assert 'for a degree cite "education"' in v2 and 'cite "skills"' in v2 and "never matched" in v2
+    assert "education" not in v1.split("REQUIREMENTS COVERAGE")[1].split("STYLE")[0]

@@ -174,7 +174,7 @@ class FakeStack:
     def service_body(self, code):
         return self.service_reply
 
-    def scraper_py(self, code):
+    def scraper_py(self, code, timeout=90):
         self.py_calls = getattr(self, "py_calls", [])
         self.py_calls.append(code)
         if "http://localhost:8000/schedule" in code:
@@ -726,7 +726,7 @@ def test_the_generated_service_snippet_really_runs(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
 
     class Capture(FakeStack):
-        def scraper_py(self, code):
+        def scraper_py(self, code, timeout=90):
             import contextlib, io
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
@@ -2771,3 +2771,175 @@ def test_gmail_rescan_errors_are_readable(capsys):
     st = FakeStack(service_status=400, mail={"detail": {"errors": ["this database has no Gmail search yet: run scripts/jobsearch migrate"]}})
     assert C.main(["gmail", "rescan"], stack=st) == 2
     assert "scripts/jobsearch migrate" in capsys.readouterr().err
+
+
+# ------------------------------------------------------------------ tailor-compare (tailoring v2, plan T0)
+
+COMPARE_OK = {"job_id": 24, "folder": "/output/compare/24-acme-backend", "compare_md": "/output/compare/24-acme-backend/compare.md", "cost_usd": 0.1,
+              "runs": {"v1": {"status": "compared", "cost_usd": 0.05, "requirements": {"matched": 4, "bridged": 2, "gap": 1},
+                              "audit": {"rejected": [], "soft": [{"x": 1}]}, "needs_attention": False},
+                       "v2": {"status": "compared", "cost_usd": 0.052, "requirements": {"matched": 4, "bridged": 2, "gap": 1},
+                              "audit": {"rejected": [{"x": 1}, {"x": 2}], "soft": []}, "needs_attention": True}}}
+
+
+def test_tailor_compare_prints_both_engines_and_where_to_read():
+    stack = FakeStack(service_reply=COMPARE_OK)
+    out = C.run_tailor_compare(stack, [24], ["v1", "v2"])
+    assert "Comparing the tailoring engines v1, v2 on 1 job(s)" in out and "saves nothing as an application" in out
+    assert "job 24: v1: $0.050, 4 matched / 2 bridged / 1 gaps, 0 removed, 1 to check" in out
+    assert "v2: $0.052, 4 matched / 2 bridged / 1 gaps, 2 removed, 0 to check, needs attention" in out
+    assert "read: " in out and out.endswith("spent: $0.100") or "spent: $0.100" in out
+    method, path, body = extract_call(stack.py_calls[-1])
+    assert (method, path, body) == ("POST", "/tailor/compare", {"job_id": 24, "engines": ["v1", "v2"]})
+
+
+def test_tailor_compare_waits_long_enough_for_two_model_runs():
+    seen = {}
+
+    class Stack(FakeStack):
+        def scraper_py(self, code, timeout=90):
+            seen["timeout"] = timeout
+            return super().scraper_py(code)
+    C.run_tailor_compare(Stack(service_reply=COMPARE_OK), [24], ["v1", "v2"])
+    assert seen["timeout"] >= 600
+
+
+def test_tailor_compare_maps_the_folder_to_the_host_for_a_remote_stack():
+    stack = FakeStack(service_reply=COMPARE_OK)
+    stack.ssh, stack.remote_dir = ["ssh", "ubuntu@host"], "/home/ubuntu/jobsearch"
+    out = C.run_tailor_compare(stack, [24], ["v1"])
+    assert "read: /home/ubuntu/jobsearch/output/compare/24-acme-backend/compare.md" in out
+    assert "scp -r ubuntu@host:/home/ubuntu/jobsearch/output/compare ." in out
+
+
+def test_tailor_compare_reports_a_refusal_per_job_and_carries_on():
+    calls = []
+
+    class Stack(FakeStack):
+        def scraper_py(self, code, timeout=90):
+            calls.append(code)
+            if len(calls) == 1:
+                return json.dumps({"status": 409, "body": {"detail": {"errors": ["a tailoring run is going right now: try again in a minute (nothing was spent)"]}}})
+            return json.dumps({"status": 200, "body": COMPARE_OK})
+    out = C.run_tailor_compare(Stack(), [7, 24], ["v1", "v2"])
+    assert "job 7: not compared: a tailoring run is going right now" in out and "job 24: v1: $0.050" in out and len(calls) == 2
+
+
+def test_tailor_compare_shows_an_engine_that_did_not_finish():
+    reply = {"cost_usd": 0.05, "compare_md": None, "runs": {"v1": {"status": "budget_paused", "reason": "not enough budget left for this job"}}}
+    out = C.run_tailor_compare(FakeStack(service_reply=reply), [24], ["v1", "v2"])
+    assert "v1: budget_paused: not enough budget left for this job" in out and "read:" not in out
+
+
+@pytest.mark.parametrize("ids,engines,msg", [([], ["v1"], "at least one job id"), (list(range(1, 12)), ["v1"], "at most 10 jobs"),
+                                             ([1], [], "engines must be some of"), ([1], ["v3"], "engines must be some of")])
+def test_tailor_compare_refuses_bad_input_before_calling_anything(ids, engines, msg):
+    stack = FakeStack(service_reply=COMPARE_OK)
+    with pytest.raises(C.CheckError, match=msg):
+        C.run_tailor_compare(stack, ids, engines)
+    assert getattr(stack, "py_calls", []) == []
+
+
+def test_tailor_compare_is_a_real_subcommand_and_in_the_help(capsys):
+    assert "tailor-compare N [N..]" in C.__doc__
+    ns = C.build_parser().parse_args(["tailor-compare", "5", "9", "--engines", "v2"])
+    assert ns.cmd == "tailor-compare" and ns.job_ids == [5, 9] and ns.engines == "v2"
+    assert C.build_parser().parse_args(["tailor-compare", "5"]).engines == "v1,v2"
+
+
+def test_tailor_compare_that_times_out_keeps_the_earlier_jobs_and_stops():
+    calls = []
+
+    class Stack(FakeStack):
+        def scraper_py(self, code, timeout=90):
+            calls.append(code)
+            if len(calls) == 2:
+                raise C.StackError("command timed out")
+            return json.dumps({"status": 200, "body": COMPARE_OK})
+    out = C.run_tailor_compare(Stack(), [24, 31, 40], ["v1", "v2"])
+    assert "job 24: v1: $0.050" in out and "job 31: no answer (command timed out)" in out and "tailoring lock" in out
+    assert "job 40" not in out and len(calls) == 2 and "spent: $0.100" in out                  # the third would only queue behind the second
+
+
+def test_tailor_compare_does_not_pay_for_the_same_job_twice():
+    stack = FakeStack(service_reply=COMPARE_OK)
+    out = C.run_tailor_compare(stack, [24, 24, 24], ["v1", "v1", "v2"])
+    assert "on 1 job(s)" in out and len(stack.py_calls) == 1 and extract_call(stack.py_calls[0])[2] == {"job_id": 24, "engines": ["v1", "v2"]}
+
+
+def test_tailor_compare_gives_the_service_less_time_than_the_command_so_the_answer_comes_back():
+    seen = {}
+
+    class Stack(FakeStack):
+        def scraper_py(self, code, timeout=90):
+            seen["outer"], seen["inner"] = timeout, int(re.search(r"urlopen\(r, timeout=(\d+)\)", code).group(1))
+            return super().scraper_py(code)
+    C.run_tailor_compare(Stack(service_reply=COMPARE_OK), [24], ["v1"])
+    assert seen["inner"] < seen["outer"] == 600
+
+
+# ------------------------------------------------------------------ tailoring v2: settings flags, validate and push-config for proof_points.json
+
+def test_tailor_settings_flags_for_v2_are_sent_and_the_display_shows_them():
+    stack = FakeStack(service_reply=dict(SETTINGS_REPLY, engine="v2", gap_policy="omit", cover_style="evidence", tone="direct", reviewer=True,
+                                         reviewer_model="claude-haiku-5-5", company_research=False))
+    out = C.run_tailor_settings(stack)
+    assert "engine:       v2" in out and "gap_policy omit, cover_style evidence, tone direct, reviewer on (claude-haiku-5-5), company_research off" in out
+    old = C.run_tailor_settings(FakeStack(service_reply=SETTINGS_REPLY))                      # a reply without the new keys still prints
+    assert "engine:       v1" in old and "reviewer on" in old
+
+
+def test_the_parser_knows_the_v2_flags():
+    ns = C.build_parser().parse_args(["tailor-settings", "set", "--engine", "v2", "--gap-policy", "bridge", "--cover-style", "classic", "--tone", "formal",
+                                      "--reviewer", "off", "--reviewer-model", "claude-haiku-5-5", "--company-research", "on"])
+    assert (ns.engine, ns.gap_policy, ns.cover_style, ns.tone, ns.reviewer, ns.reviewer_model, ns.company_research) == ("v2", "bridge", "classic", "formal", "off", "claude-haiku-5-5", "on")
+    for bad in (["--engine", "v3"], ["--tone", "rude"], ["--reviewer", "maybe"]):
+        with pytest.raises(SystemExit):
+            C.build_parser().parse_args(["tailor-settings", "set", *bad])
+
+
+def test_setting_the_engine_posts_it_with_the_booleans_as_booleans(monkeypatch, capsys):
+    stack = FakeStack(service_reply=SETTINGS_REPLY)
+    assert C.main(["tailor-settings", "set", "--engine", "v2", "--reviewer", "off", "--company-research", "on"], stack=stack) == 0
+    method, path, body = extract_call(next(c for c in stack.py_calls if "POST" in c and "/tailor/settings" in c))
+    assert (method, path) == ("POST", "/tailor/settings") and body["engine"] == "v2" and body["reviewer"] is False and body["company_research"] is True
+
+
+def test_validate_checks_proof_points_when_the_file_exists_and_stays_quiet_when_it_does_not(tmp_path):
+    cfg = tmp_path
+    (cfg / "resume.json").write_text(json.dumps({"basics": {"name": "A", "email": "a@b.co"}, "work": [{"id": "w1", "name": "X", "position": "Dev", "startDate": "2024-01",
+                                                                                                         "highlights": [{"id": "w1-b1", "text": "Built X."}]}],
+                                                 "education": [], "skills": []}))
+    lines, ok = C.validate_config(cfg)
+    assert not any("proof_points" in l for l in lines)
+    good = {"id": "pp-1", "bullet": "w1-b1", "project": "P", "role": "built", "what": "Did X.", "metric": "", "tech": [], "evidence": ""}
+    (cfg / "proof_points.json").write_text(json.dumps({"proof_points": [good]}))
+    lines, _ = C.validate_config(cfg)
+    assert " ✓ proof_points.json: valid (1 proof point(s))" in lines
+    (cfg / "proof_points.json").write_text(json.dumps({"proof_points": [dict(good, bullet="nope"), dict(good, id="pp-2", metric="40% faster", evidence="")]}))
+    lines, ok = C.validate_config(cfg)
+    assert not ok and " ✗ proof_points.json:" in lines and any("must be the id of a bullet" in l for l in lines) and any("needs evidence" in l for l in lines)
+    (cfg / "proof_points.json").write_text("{nope")
+    lines, ok = C.validate_config(cfg)
+    assert not ok and any("proof_points.json: could not be read" in l for l in lines)
+
+
+def test_push_config_copies_proof_points_when_valid_and_refuses_a_broken_one():
+    import tempfile, pathlib
+    repo = pathlib.Path(tempfile.mkdtemp())
+    (repo / "config").mkdir()
+    shutil.copy(REPO / "config" / "profile.example.json", repo / "config" / "profile.json")
+    shutil.copy(REPO / "config" / "resume.example.json", repo / "config" / "resume.json")
+    resume = json.loads((repo / "config" / "resume.json").read_text())
+    bullet = resume["work"][0]["highlights"][0]["id"]
+    (repo / "config" / "proof_points.json").write_text(json.dumps({"proof_points": [{"id": "pp-1", "bullet": bullet, "project": "P", "role": "built", "what": "Did X.", "metric": "", "tech": [], "evidence": ""}]}))
+    stack = FakeStack()
+    stack.ssh, stack.remote_dir, stack.put = ["ssh", "u@h"], "/home/u/jobsearch", []
+    stack.put_config_file = lambda name, text: stack.put.append(name)
+    out = C.run_push_config(stack, repo=repo)
+    assert "copied proof_points.json" in out and set(stack.put) == {"profile.json", "resume.json", "proof_points.json"}
+    (repo / "config" / "proof_points.json").write_text(json.dumps({"proof_points": [{"id": "pp-1", "bullet": "nope"}]}))
+    stack.put.clear()
+    with pytest.raises(C.CheckError, match="proof_points.json does not pass the checks"):
+        C.run_push_config(stack, repo=repo)
+    assert stack.put == []
