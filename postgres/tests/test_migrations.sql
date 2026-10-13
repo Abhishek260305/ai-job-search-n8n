@@ -2845,8 +2845,9 @@ END $$;
 DO $$
 BEGIN
   -- 026 (tailoring v2): the defaults change nothing, the values are checked, and the cache is not the dashboard's business
-  ASSERT (SELECT engine = 'v1' AND gap_policy = 'omit' AND cover_style = 'evidence' AND tone = 'direct' AND reviewer AND reviewer_model = 'claude-haiku-5-5' AND company_research
-            FROM tailor_settings WHERE id = 1), 'the v2 settings default to engine v1 and the documented choices';
+  ASSERT (SELECT engine = 'v2' AND gap_policy = 'omit' AND cover_style = 'evidence' AND tone = 'direct' AND reviewer AND reviewer_model = 'claude-haiku-5-5' AND company_research
+            FROM tailor_settings WHERE id = 1), 'the v2 settings default to engine v2 (027) and the documented choices';
+  BEGIN UPDATE tailor_settings SET engine = 'v1'; RAISE EXCEPTION 'engine accepted v1 after it was retired'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN UPDATE tailor_settings SET engine = 'v3'; RAISE EXCEPTION 'engine accepted v3'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN UPDATE tailor_settings SET gap_policy = 'hide'; RAISE EXCEPTION 'gap_policy accepted hide'; EXCEPTION WHEN check_violation THEN NULL; END;
   BEGIN UPDATE tailor_settings SET cover_style = 'fancy'; RAISE EXCEPTION 'cover_style accepted fancy'; EXCEPTION WHEN check_violation THEN NULL; END;
@@ -2854,7 +2855,7 @@ BEGIN
   BEGIN UPDATE tailor_settings SET reviewer_model = 'two words'; RAISE EXCEPTION 'reviewer_model accepted a bad name'; EXCEPTION WHEN check_violation THEN NULL; END;
   UPDATE tailor_settings SET engine = 'v2', gap_policy = 'bridge', cover_style = 'classic', tone = 'formal', reviewer = false, company_research = false, reviewer_model = 'claude-haiku-5-5';
   ASSERT (SELECT engine = 'v2' AND NOT reviewer AND NOT company_research FROM tailor_settings WHERE id = 1), 'the v2 settings can be changed';
-  UPDATE tailor_settings SET engine = 'v1', gap_policy = 'omit', cover_style = 'evidence', tone = 'direct', reviewer = true, company_research = true;
+  UPDATE tailor_settings SET gap_policy = 'omit', cover_style = 'evidence', tone = 'direct', reviewer = true, company_research = true;
 
   INSERT INTO company_notes (company_key, facts, source_url) VALUES ('acme', '["Acme builds payment software."]', 'https://acme.com/');
   ASSERT (SELECT count(*) FROM company_notes WHERE company_key = 'acme') = 1 AND (SELECT fetched_at > now() - interval '1 minute' FROM company_notes WHERE company_key = 'acme'), 'a note is stored and stamped';
@@ -2867,6 +2868,15 @@ BEGIN
   BEGIN UPDATE tailor_settings SET engine = 'v2'; RAISE EXCEPTION 'the dashboard role changed the engine'; EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   RESET ROLE;
   ASSERT NOT has_table_privilege('public', 'company_notes', 'SELECT'), 'PUBLIC cannot read the company notes';
+END $$;
+
+DO $$
+BEGIN
+  -- 027 (v1 retired): a column default of v2, v1 refused by the database as well, and the setting is still changeable to v2
+  ASSERT (SELECT column_default FROM information_schema.columns WHERE table_name = 'tailor_settings' AND column_name = 'engine') LIKE '%v2%', 'the default is v2';
+  BEGIN UPDATE tailor_settings SET engine = 'V1'; RAISE EXCEPTION 'engine accepted V1'; EXCEPTION WHEN check_violation THEN NULL; END;
+  UPDATE tailor_settings SET engine = 'v2';
+  ASSERT (SELECT engine FROM tailor_settings WHERE id = 1) = 'v2', 'v2 is accepted';
 END $$;
 
 ROLLBACK;

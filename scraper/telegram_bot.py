@@ -137,7 +137,7 @@ def parse_setting(key: str, value: str) -> tuple[str, object]:
         if value not in ("1", "2"):
             raise ValueError("max_pages must be 1 or 2")
         return "max_pages", int(value)
-    for name, choices in (("engine", ("v1", "v2")), ("gap_policy", ("omit", "bridge")), ("cover_style", ("evidence", "classic")),
+    for name, choices in (("engine", ("v2",)), ("gap_policy", ("omit", "bridge")), ("cover_style", ("evidence", "classic")),
                           ("tone", ("formal", "direct", "conversational"))):
         if key == name:
             if value.lower() not in choices:
@@ -180,7 +180,7 @@ def settings_text(s: dict) -> str:
         f"cover_letter: {'on' if s['cover_letter'] else 'off'}   max_pages: {s['max_pages']}   paper: {s.get('paper', 'a4')}   model: {s['model']}",
         f"style_notes: {s.get('style_notes') or 'none'}",
         f"verify (fact check): {'on' if s.get('verify', True) else 'off'}   ({s.get('verify_model', 'claude-haiku-5-5')})",
-        f"engine: {s.get('engine', 'v1')}   (v1 is today's writer; v2 is the newer one, see `tailor-compare`)   gap_policy: {s.get('gap_policy', 'omit')}   "
+        f"engine: v2   gap_policy: {s.get('gap_policy', 'omit')}   "
         f"cover_style: {s.get('cover_style', 'evidence')}   tone: {s.get('tone', 'direct')}",
         f"reviewer: {'on' if s.get('reviewer', True) else 'off'} ({s.get('reviewer_model', 'claude-haiku-5-5')})   company_research: {'on' if s.get('company_research', True) else 'off'}"])
 

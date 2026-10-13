@@ -43,11 +43,12 @@ MAX_EMPHASIZE = 10
 
 STATUSES = {"matched", "bridged", "gap"}
 
-# Tailoring v2 (docs/superpowers/plans/2026-10-13-tailoring-v2.md) is built step by step behind an `engine` option. v1 is what
-# has always run and stays the default: its prompt and its audit are unchanged. v2 starts with the gap policy (T1).
-ENGINES = ("v1", "v2")
+# Tailoring v2 is the only writer. The original (v1) was retired once v2 had been compared with it on real jobs: nothing a user, a
+# stored setting or a request can name selects it any more (an old stored "v1" runs as v2). Its branches stay in this file as
+# dormant code, unreachable through engine_options.
+ENGINES = ("v2",)
 GAP_POLICIES = ("omit", "bridge")
-DEFAULT_ENGINE = "v1"
+DEFAULT_ENGINE = "v2"
 DEFAULT_GAP_POLICY = "omit"
 
 
@@ -76,8 +77,10 @@ def engine_options(settings: Optional[dict]) -> tuple:
     settings = settings or {}
     engine = settings.get("engine") or DEFAULT_ENGINE
     policy = settings.get("gap_policy") or DEFAULT_GAP_POLICY
+    if engine == "v1":
+        engine = "v2"                       # a row stored before v1 was retired: the one writer runs
     if engine not in ENGINES:
-        raise ValueError(f"engine must be one of {', '.join(ENGINES)}")
+        raise ValueError("engine must be v2 (v1 was retired)")
     if policy not in GAP_POLICIES:
         raise ValueError(f"gap_policy must be one of {', '.join(GAP_POLICIES)}")
     return engine, policy
@@ -301,8 +304,7 @@ def _resume_for_prompt(resume: dict) -> str:
 def build_system(resume: dict, profile: dict, *, cover_letter: bool = True, mode: str = "full", style_notes: Optional[str] = None,
                  engine: str = DEFAULT_ENGINE, gap_policy: str = DEFAULT_GAP_POLICY, proof_points: Optional[list] = None,
                  cover_style: str = "evidence", tone: str = "direct") -> str:
-    """Static per resume+profile+mode: the cacheable prefix. Keep dates and job text out of it. v1 (the default) is byte-for-byte
-    what it always was; v2 adds the gap policy."""
+    """Static per resume+profile+mode: the cacheable prefix. Keep dates and job text out of it."""
     engine, gap_policy = engine_options({"engine": engine, "gap_policy": gap_policy})
     schema = dict(_SCHEMA_COVER_ONLY if mode == "cover_only" else _SCHEMA_FULL)
     if not cover_letter:
@@ -822,6 +824,7 @@ def audit(resume: dict, patch: dict, job: dict, profile: Optional[dict] = None, 
     """Deterministic grounding audit of a validated patch. Also normalises dashes (recorded in .fixed).
     `engine` v2 adds: the gap policy, the proof points as a source of facts, skill levels, ownership verbs, title drift and filler."""
     result = Audit()
+    engine, _ = engine_options({"engine": engine})
     v2 = engine == "v2"
     idx = resume_index(resume)
     vocab = vocabulary(resume)

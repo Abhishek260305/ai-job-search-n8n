@@ -2773,41 +2773,38 @@ def test_gmail_rescan_errors_are_readable(capsys):
     assert "scripts/jobsearch migrate" in capsys.readouterr().err
 
 
-# ------------------------------------------------------------------ tailor-compare (tailoring v2, plan T0)
+# ------------------------------------------------------------------ tailor-compare: try the tailoring on a job without saving it
 
-COMPARE_OK = {"job_id": 24, "folder": "/output/compare/24-acme-backend", "compare_md": "/output/compare/24-acme-backend/compare.md", "cost_usd": 0.1,
-              "runs": {"v1": {"status": "compared", "cost_usd": 0.05, "requirements": {"matched": 4, "bridged": 2, "gap": 1},
-                              "audit": {"rejected": [], "soft": [{"x": 1}]}, "needs_attention": False},
-                       "v2": {"status": "compared", "cost_usd": 0.052, "requirements": {"matched": 4, "bridged": 2, "gap": 1},
+COMPARE_OK = {"job_id": 24, "folder": "/output/compare/24-acme-backend", "compare_md": "/output/compare/24-acme-backend/compare.md", "cost_usd": 0.05,
+              "runs": {"v2": {"status": "compared", "cost_usd": 0.05, "requirements": {"matched": 4, "bridged": 2, "gap": 1},
                               "audit": {"rejected": [{"x": 1}, {"x": 2}], "soft": []}, "needs_attention": True}}}
 
 
-def test_tailor_compare_prints_both_engines_and_where_to_read():
+def test_tailor_compare_prints_the_result_and_where_to_read():
     stack = FakeStack(service_reply=COMPARE_OK)
-    out = C.run_tailor_compare(stack, [24], ["v1", "v2"])
-    assert "Comparing the tailoring engines v1, v2 on 1 job(s)" in out and "saves nothing as an application" in out
-    assert "job 24: v1: $0.050, 4 matched / 2 bridged / 1 gaps, 0 removed, 1 to check" in out
-    assert "v2: $0.052, 4 matched / 2 bridged / 1 gaps, 2 removed, 0 to check, needs attention" in out
-    assert "read: " in out and out.endswith("spent: $0.100") or "spent: $0.100" in out
+    out = C.run_tailor_compare(stack, [24])
+    assert "Trying the tailoring on 1 job(s)" in out and "saves nothing as an application" in out
+    assert "job 24: v2: $0.050, 4 matched / 2 bridged / 1 gaps, 2 removed, 0 to check, needs attention" in out
+    assert "read: " in out and "spent: $0.050" in out
     method, path, body = extract_call(stack.py_calls[-1])
-    assert (method, path, body) == ("POST", "/tailor/compare", {"job_id": 24, "engines": ["v1", "v2"]})
+    assert (method, path, body) == ("POST", "/tailor/compare", {"job_id": 24, "engines": ["v2"]})
 
 
-def test_tailor_compare_waits_long_enough_for_two_model_runs():
+def test_tailor_compare_waits_long_enough_for_a_model_run():
     seen = {}
 
     class Stack(FakeStack):
         def scraper_py(self, code, timeout=90):
             seen["timeout"] = timeout
             return super().scraper_py(code)
-    C.run_tailor_compare(Stack(service_reply=COMPARE_OK), [24], ["v1", "v2"])
+    C.run_tailor_compare(Stack(service_reply=COMPARE_OK), [24])
     assert seen["timeout"] >= 600
 
 
 def test_tailor_compare_maps_the_folder_to_the_host_for_a_remote_stack():
     stack = FakeStack(service_reply=COMPARE_OK)
     stack.ssh, stack.remote_dir = ["ssh", "ubuntu@host"], "/home/ubuntu/jobsearch"
-    out = C.run_tailor_compare(stack, [24], ["v1"])
+    out = C.run_tailor_compare(stack, [24])
     assert "read: /home/ubuntu/jobsearch/output/compare/24-acme-backend/compare.md" in out
     assert "scp -r ubuntu@host:/home/ubuntu/jobsearch/output/compare ." in out
 
@@ -2821,18 +2818,18 @@ def test_tailor_compare_reports_a_refusal_per_job_and_carries_on():
             if len(calls) == 1:
                 return json.dumps({"status": 409, "body": {"detail": {"errors": ["a tailoring run is going right now: try again in a minute (nothing was spent)"]}}})
             return json.dumps({"status": 200, "body": COMPARE_OK})
-    out = C.run_tailor_compare(Stack(), [7, 24], ["v1", "v2"])
-    assert "job 7: not compared: a tailoring run is going right now" in out and "job 24: v1: $0.050" in out and len(calls) == 2
+    out = C.run_tailor_compare(Stack(), [7, 24])
+    assert "job 7: not compared: a tailoring run is going right now" in out and "job 24: v2: $0.050" in out and len(calls) == 2
 
 
-def test_tailor_compare_shows_an_engine_that_did_not_finish():
-    reply = {"cost_usd": 0.05, "compare_md": None, "runs": {"v1": {"status": "budget_paused", "reason": "not enough budget left for this job"}}}
-    out = C.run_tailor_compare(FakeStack(service_reply=reply), [24], ["v1", "v2"])
-    assert "v1: budget_paused: not enough budget left for this job" in out and "read:" not in out
+def test_tailor_compare_shows_a_run_that_did_not_finish():
+    reply = {"cost_usd": 0.0, "compare_md": None, "runs": {"v2": {"status": "budget_paused", "reason": "not enough budget left for this job"}}}
+    out = C.run_tailor_compare(FakeStack(service_reply=reply), [24])
+    assert "v2: budget_paused: not enough budget left for this job" in out and "read:" not in out
 
 
-@pytest.mark.parametrize("ids,engines,msg", [([], ["v1"], "at least one job id"), (list(range(1, 12)), ["v1"], "at most 10 jobs"),
-                                             ([1], [], "engines must be some of"), ([1], ["v3"], "engines must be some of")])
+@pytest.mark.parametrize("ids,engines,msg", [([], None, "at least one job id"), (list(range(1, 12)), None, "at most 10 jobs"),
+                                             ([1], ["v1"], "v1 was retired"), ([1], ["v3"], "v1 was retired")])
 def test_tailor_compare_refuses_bad_input_before_calling_anything(ids, engines, msg):
     stack = FakeStack(service_reply=COMPARE_OK)
     with pytest.raises(C.CheckError, match=msg):
@@ -2840,11 +2837,12 @@ def test_tailor_compare_refuses_bad_input_before_calling_anything(ids, engines, 
     assert getattr(stack, "py_calls", []) == []
 
 
-def test_tailor_compare_is_a_real_subcommand_and_in_the_help(capsys):
+def test_tailor_compare_is_a_real_subcommand_and_in_the_help_and_has_no_engine_choice():
     assert "tailor-compare N [N..]" in C.__doc__
-    ns = C.build_parser().parse_args(["tailor-compare", "5", "9", "--engines", "v2"])
-    assert ns.cmd == "tailor-compare" and ns.job_ids == [5, 9] and ns.engines == "v2"
-    assert C.build_parser().parse_args(["tailor-compare", "5"]).engines == "v1,v2"
+    ns = C.build_parser().parse_args(["tailor-compare", "5", "9"])
+    assert ns.cmd == "tailor-compare" and ns.job_ids == [5, 9] and not hasattr(ns, "engines")
+    with pytest.raises(SystemExit):
+        C.build_parser().parse_args(["tailor-compare", "5", "--engines", "v1"])
 
 
 def test_tailor_compare_that_times_out_keeps_the_earlier_jobs_and_stops():
@@ -2856,15 +2854,15 @@ def test_tailor_compare_that_times_out_keeps_the_earlier_jobs_and_stops():
             if len(calls) == 2:
                 raise C.StackError("command timed out")
             return json.dumps({"status": 200, "body": COMPARE_OK})
-    out = C.run_tailor_compare(Stack(), [24, 31, 40], ["v1", "v2"])
-    assert "job 24: v1: $0.050" in out and "job 31: no answer (command timed out)" in out and "tailoring lock" in out
-    assert "job 40" not in out and len(calls) == 2 and "spent: $0.100" in out                  # the third would only queue behind the second
+    out = C.run_tailor_compare(Stack(), [24, 31, 40])
+    assert "job 24: v2: $0.050" in out and "job 31: no answer (command timed out)" in out and "tailoring lock" in out
+    assert "job 40" not in out and len(calls) == 2 and "spent: $0.050" in out                  # the third would only queue behind the second
 
 
 def test_tailor_compare_does_not_pay_for_the_same_job_twice():
     stack = FakeStack(service_reply=COMPARE_OK)
-    out = C.run_tailor_compare(stack, [24, 24, 24], ["v1", "v1", "v2"])
-    assert "on 1 job(s)" in out and len(stack.py_calls) == 1 and extract_call(stack.py_calls[0])[2] == {"job_id": 24, "engines": ["v1", "v2"]}
+    out = C.run_tailor_compare(stack, [24, 24, 24])
+    assert "on 1 job(s)" in out and len(stack.py_calls) == 1 and extract_call(stack.py_calls[0])[2] == {"job_id": 24, "engines": ["v2"]}
 
 
 def test_tailor_compare_gives_the_service_less_time_than_the_command_so_the_answer_comes_back():
@@ -2874,7 +2872,7 @@ def test_tailor_compare_gives_the_service_less_time_than_the_command_so_the_answ
         def scraper_py(self, code, timeout=90):
             seen["outer"], seen["inner"] = timeout, int(re.search(r"urlopen\(r, timeout=(\d+)\)", code).group(1))
             return super().scraper_py(code)
-    C.run_tailor_compare(Stack(service_reply=COMPARE_OK), [24], ["v1"])
+    C.run_tailor_compare(Stack(service_reply=COMPARE_OK), [24])
     assert seen["inner"] < seen["outer"] == 600
 
 
@@ -2886,14 +2884,14 @@ def test_tailor_settings_flags_for_v2_are_sent_and_the_display_shows_them():
     out = C.run_tailor_settings(stack)
     assert "engine:       v2" in out and "gap_policy omit, cover_style evidence, tone direct, reviewer on (claude-haiku-5-5), company_research off" in out
     old = C.run_tailor_settings(FakeStack(service_reply=SETTINGS_REPLY))                      # a reply without the new keys still prints
-    assert "engine:       v1" in old and "reviewer on" in old
+    assert "engine:       v2" in old and "reviewer on" in old
 
 
 def test_the_parser_knows_the_v2_flags():
     ns = C.build_parser().parse_args(["tailor-settings", "set", "--engine", "v2", "--gap-policy", "bridge", "--cover-style", "classic", "--tone", "formal",
                                       "--reviewer", "off", "--reviewer-model", "claude-haiku-5-5", "--company-research", "on"])
     assert (ns.engine, ns.gap_policy, ns.cover_style, ns.tone, ns.reviewer, ns.reviewer_model, ns.company_research) == ("v2", "bridge", "classic", "formal", "off", "claude-haiku-5-5", "on")
-    for bad in (["--engine", "v3"], ["--tone", "rude"], ["--reviewer", "maybe"]):
+    for bad in (["--engine", "v3"], ["--engine", "v1"], ["--tone", "rude"], ["--reviewer", "maybe"]):
         with pytest.raises(SystemExit):
             C.build_parser().parse_args(["tailor-settings", "set", *bad])
 

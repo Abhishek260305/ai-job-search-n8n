@@ -550,7 +550,7 @@ class TailorSettingsRequest(BaseModel):
     max_pages: Optional[int] = None
     paper: Optional[str] = None
     style_notes: Optional[str] = None
-    engine: Optional[str] = None            # tailoring v2 (migration 026): v1 | v2
+    engine: Optional[str] = None            # only v2 (v1 was retired)
     gap_policy: Optional[str] = None        # omit | bridge
     cover_style: Optional[str] = None       # evidence | classic
     tone: Optional[str] = None              # formal | direct | conversational
@@ -769,7 +769,7 @@ def tailor_status(job_id: Annotated[int, Query(ge=1, le=2**63 - 1)]):
 
 class TailorCompareRequest(BaseModel):
     job_id: Annotated[int, Field(strict=True, ge=1, le=2**63 - 1)]
-    engines: list[str] = ["v1", "v2"]
+    engines: list[str] = ["v2"]
 
 
 @app.post("/tailor/compare")

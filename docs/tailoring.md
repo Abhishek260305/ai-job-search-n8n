@@ -41,17 +41,16 @@ Anything removed is recorded in `summary.md` and the Telegram message, and flags
 
 What this does **not** guarantee: the checks are strong, not perfect. A model can still phrase something misleadingly in a way no word list or second model catches. Read the documents before you send them.
 
-## Tailoring v2 and comparing the engines
+## Tailoring v2
 
-Tailoring has two writers. **v1** is what has always run and is still the default. **v2** is a newer one that writes sharper letters with the same honesty: it can say more of what is true, and it is never allowed to say anything that is not. You choose the engine, after comparing them on your own jobs.
+Tailoring has one writer, **v2**. It writes sharp letters with strict honesty: it can say more of what is true, and it is never allowed to say anything that is not. (The original writer, v1, was retired once both had been compared on real jobs. It can no longer be selected anywhere, and a database row that still says `v1` runs as v2.)
 
 ```bash
-scripts/jobsearch tailor-compare 24 31 40                 # both engines, side by side, nothing saved as an application
-scripts/jobsearch tailor-settings set --engine v2          # switch (needs migration 026: scripts/jobsearch migrate)
-scripts/jobsearch tailor-settings set --engine v1          # and back, any time
+scripts/jobsearch tailor-compare 24 31 40                 # try the tailoring on jobs: nothing is saved as an application
+scripts/jobsearch tailor-settings                          # the options below (needs migrations 026 and 027: scripts/jobsearch migrate)
 ```
 
-`tailor-compare` writes, per job, `output/compare/<job>/v1/`, `.../v2/` (the usual files) and a `compare.md` with the two cover letters, headlines and summaries, reworded bullets, requirement coverage, keyword coverage and what the checks found, with the cost of each. It **saves no application, changes no status, sends no message and touches no attempt counter**: you can run it on any job (even one you applied to). It costs a draft per engine (about 5 cents each, priced against your caps first, logged as `tailor_compare` so the Spend page shows it apart). It refuses, having spent nothing, while tailoring is off, while paused, for a scam-blocked job, or while a scheduled run is going. `--engines v2` runs one engine.
+`tailor-compare` writes, per job, `output/compare/<job>/v2/` (the usual files) and a `compare.md` with the cover letter, headline and summary, reworded bullets, requirement coverage, keyword coverage and what the checks found, with the cost. It **saves no application, changes no status, sends no message and touches no attempt counter**: you can run it on any job (even one you applied to). It costs a draft (about 5 cents, priced against your caps first, logged as `tailor_compare` so the Spend page shows it apart). It refuses, having spent nothing, while tailoring is off, while paused, for a scam-blocked job, or while a scheduled run is going.
 
 **The line does not move.** v2 may emphasise, order, word, quantify and show interest. It never adds an employer, title, date, number, technology or skill that the resume, the profile or your proof points do not support, and never words a skill above the level you gave it. Everything below only makes the audit say no more often, or lets the writing use more of what is true.
 
@@ -72,7 +71,7 @@ scripts/jobsearch tailor-settings set --engine v1          # and back, any time
 
 ### Cost and safety
 
-v2 adds up to three small calls: the reviewer (about a cent), the company note (a fraction of a cent, once a month per company) and, as before, the fact check. A real comparison of six jobs cost about 6 to 7 cents per job per engine, v2 slightly less than v1 because it needs fewer revisions. Every call is priced at its worst case first, logged under its own purpose (`tailor_review`, `tailor_company`, `tailor_verify`, and `tailor_compare...` for comparisons), counted against the same daily and monthly caps and stopped by the pause; none of it touches a Claude subscription. If the reviewer or the company note cannot run, tailoring goes on without it. The settings are in the database and are changed with the CLI only (the dashboard cannot change the engine, like the model and the approval mode).
+v2 adds up to three small calls: the reviewer (about a cent), the company note (a fraction of a cent, once a month per company) and, as before, the fact check. Real runs on eleven jobs cost about 2 to 6 cents each. Every call is priced at its worst case first, logged under its own purpose (`tailor_review`, `tailor_company`, `tailor_verify`, and `tailor_compare...` for comparisons), counted against the same daily and monthly caps and stopped by the pause; none of it touches a Claude subscription. If the reviewer or the company note cannot run, tailoring goes on without it. The settings are in the database and are changed with the CLI only (the dashboard cannot change the engine, like the model and the approval mode).
 
 What v2 will not do: add a skill, tool, employer, title, date, degree, number or year you do not have; word a skill above its level; use a metric that has no evidence; use a company fact it did not find on the company's own site; hide a gap from *you* (gaps stay in the table, `summary.md` and the Telegram note).
 
@@ -93,11 +92,11 @@ Stored in the database; change them any time. Your defaults are `mode auto`, `ap
 | `style_notes` | text, at most 400 characters, or none | your tone and wording preferences for the writing, for example "Warm but formal. Short sentences." They are placed in the prompt as preferences that cannot override the honesty rules, the output format or the writing rules, and the audit and fact check run as always, so they can never make the writing add a claim your resume does not support. |
 | `verify` | on / off | the Haiku fact check (recommended). |
 | `model` | model id | default `claude-sonnet-5-5`. |
-| `engine` | `v1` / `v2` | the writer (see above). Default `v1`. |
-| `gap_policy` | `omit` / `bridge` | v2 only. Default `omit`. |
-| `cover_style` | `evidence` / `classic` | v2 only. Default `evidence`. |
-| `tone` | `formal` / `direct` / `conversational` | v2 only. Default `direct`. |
-| `reviewer`, `reviewer_model` | on / off, model id | v2 only: the reviewer pass. Default on, Haiku. |
+| `engine` | `v2` | the only writer (v1 was retired; setting `v1` is refused, and an old stored `v1` runs as v2). |
+| `gap_policy` | `omit` / `bridge` | Default `omit`. |
+| `cover_style` | `evidence` / `classic` | Default `evidence`. |
+| `tone` | `formal` / `direct` / `conversational` | Default `direct`. |
+| `reviewer`, `reviewer_model` | on / off, model id | the reviewer pass. Default on, Haiku. |
 | `company_research` | on / off | v2 only: the company angle. Default on. |
 
 ```bash

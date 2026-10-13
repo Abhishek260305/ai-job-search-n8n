@@ -60,7 +60,6 @@ def test_proof_point_text_is_per_bullet_or_global_and_goes_to_the_prompt():
     assert "Billing" in V.points_text(pts) and V.points_text(None) == ""
     prompt = T.build_system(RESUME, PROFILE, engine="v2", proof_points=pts)
     assert "PROOF POINTS" in prompt and "pp-1 (bullet w1-b1, the candidate built it)" in prompt and "Result: 50,000+ executions a day" in prompt
-    assert "PROOF POINTS" not in T.build_system(RESUME, PROFILE, engine="v1", proof_points=pts)          # v1 ignores them
     assert V.points_level(pts) == 3 and V.points_level([]) == 0
 
 
@@ -89,7 +88,7 @@ def test_skill_levels_and_the_wording_block():
     block = V.wording_block(LEVELS_PROFILE)
     assert "strong (go, postgresql)" in block and "moderate (kafka, redis)" in block and "weak (terraform)" in block and "toolkit" in block
     assert V.wording_block({}) == ""
-    assert "SKILL WORDING" in T.build_system(RESUME, LEVELS_PROFILE, engine="v2") and "SKILL WORDING" not in T.build_system(RESUME, LEVELS_PROFILE)
+    assert "SKILL WORDING" in T.build_system(RESUME, LEVELS_PROFILE, engine="v2")
 
 
 @pytest.mark.parametrize("text,skill", [
@@ -131,7 +130,6 @@ def test_the_v2_audit_rejects_a_proficiency_claim_and_repair_removes_the_sentenc
     assert [v for v in a.hard if v["kind"] == "proficiency" and v["where"] == "bullet w1-b2"]
     fixed, _ = T.repair(p, a)
     assert "proficient" not in fixed["cover_letter"]["paragraphs"][1] and "w1-b2" not in fixed["work"][0]["rewrite"] and aud2(fixed, profile=LEVELS_PROFILE).ok
-    assert not [v for v in T.audit(RESUME, p, JOB, LEVELS_PROFILE).hard if v["kind"] == "proficiency"]      # v1 does not know skill levels
 
 
 def test_the_v2_audit_rejects_work_claimed_for_a_listed_only_skill_in_the_letter():
@@ -230,12 +228,11 @@ def test_a_title_in_the_profiles_target_roles_or_the_resume_is_not_drift():
     assert not [v for v in aud2(p, profile=profile).hard if v["kind"] == "title_drift"]
 
 
-def test_the_wider_banned_phrases_are_soft_findings_under_v2_only():
+def test_the_wider_banned_phrases_are_soft_findings():
     p = T.validate_patch(good(), RESUME)
     p["cover_letter"]["paragraphs"][0] += " I am excited to bring robust, seamless systems and best practices."
     soft = {v["token"] for v in aud2(p).soft if v["kind"] == "style"}
     assert {"robust", "seamless", "best practices", "i am excited to"} <= soft
-    assert not {"robust", "seamless"} & {v["token"] for v in T.audit(RESUME, p, JOB, PROFILE).soft if v["kind"] == "style"}
 
 
 # ------------------------------------------------------------------ T5: the reviewer
@@ -398,19 +395,17 @@ EVIDENCE_LETTER = ["I am applying for the Senior Backend Engineer role at Globex
                    "I would start with the Kubernetes services your team runs."]
 
 
-def test_the_evidence_prompt_replaces_the_three_paragraph_rules_under_v2_and_classic_keeps_them():
+def test_the_evidence_prompt_replaces_the_three_paragraph_rules_and_classic_keeps_them():
     ev = T.build_system(RESUME, PROFILE, engine="v2")
     assert "4 to 6 short paragraphs" in ev and 'starts with "- "' in ev and "exactly 3 paragraphs" not in ev and "300 to 380 words" in ev
     classic = T.build_system(RESUME, PROFILE, engine="v2", cover_style="classic")
     assert "exactly 3 paragraphs" in classic and "4 to 6 short paragraphs" not in classic
-    assert "exactly 3 paragraphs" in T.build_system(RESUME, PROFILE)                                 # v1: untouched
 
 
 @pytest.mark.parametrize("tone,words", [("formal", "formal and measured"), ("direct", "direct and plain"), ("conversational", "warm and conversational")])
-def test_the_tone_and_the_banned_words_are_in_the_v2_prompt_only(tone, words):
+def test_the_tone_and_the_banned_words_are_in_the_prompt(tone, words):
     s = T.build_system(RESUME, PROFILE, engine="v2", tone=tone)
     assert words in s and "Never use these words or phrases: passionate, leverage, robust" in s
-    assert "TONE AND WORDS" not in T.build_system(RESUME, PROFILE)
 
 
 def test_an_evidence_letter_of_five_paragraphs_validates_only_in_the_evidence_style():

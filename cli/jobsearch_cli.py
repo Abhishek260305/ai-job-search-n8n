@@ -11,7 +11,7 @@ Commands:
   status                  what the pipeline has found and what needs attention
   budget [set]            Claude spend vs your caps; `budget set --monthly 10 --daily 1.5` changes them
   tailor [JOB_ID]         tailor one job (or the next eligible ones): draft, honesty checks, PDFs
-  tailor-compare N [N..]  tailor jobs with two engines (v1 today, v2 experimental) into output/compare/, side by side; saves no application
+  tailor-compare N [N..]  try the tailoring on jobs into output/compare/ without saving an application
   review                  applications waiting for your decision
   approve|skip|applied N  record your decision on job N (works with or without tailoring)
   mark N STAGE            set any stage by hand: interview, offer, rejected, ... (no Gmail needed)
@@ -668,24 +668,24 @@ def run_tailor(stack, job_id: Optional[int], limit: Optional[int]) -> str:
     return "\n".join(lines)
 
 
-TAILOR_ENGINES = ("v1", "v2")
+TAILOR_ENGINES = ("v2",)
 MAX_COMPARE_JOBS = 10
 
 
-def run_tailor_compare(stack, job_ids: list, engines: list) -> str:
-    """Tailor each job with each engine into output/compare/ (nothing is saved as an application) and say where to read it."""
+def run_tailor_compare(stack, job_ids: list, engines: Optional[list] = None) -> str:
+    """Tailor each job into output/compare/ (nothing is saved as an application) and say where to read it."""
     if not job_ids:
         raise CheckError("give at least one job id")
     if len(job_ids) > MAX_COMPARE_JOBS:
-        raise CheckError(f"at most {MAX_COMPARE_JOBS} jobs at a time (each one costs a draft per engine)")
-    engines = list(dict.fromkeys(engines))
-    if not engines or any(e not in TAILOR_ENGINES for e in engines):
-        raise CheckError(f"engines must be some of {', '.join(TAILOR_ENGINES)}")
+        raise CheckError(f"at most {MAX_COMPARE_JOBS} jobs at a time (each one costs a draft)")
+    engines = list(dict.fromkeys(engines or TAILOR_ENGINES))
+    if any(e not in TAILOR_ENGINES for e in engines):
+        raise CheckError("the only writer is v2 (v1 was retired)")
     job_ids = list(dict.fromkeys(job_ids))                      # the same job twice would be paid for twice
     ssh = getattr(stack, "ssh", [])
     base = stack.remote_dir if ssh else str(getattr(stack, "repo", REPO))
-    lines = [f"Comparing the tailoring engines {', '.join(engines)} on {len(job_ids)} job(s). This uses the Claude API (about $0.05 per engine "
-             "per job, inside your caps) and saves nothing as an application.", ""]
+    lines = [f"Trying the tailoring on {len(job_ids)} job(s). This uses the Claude API (about $0.05 per job, inside your caps) and saves "
+             "nothing as an application.", ""]
     total = 0.0
     for job_id in job_ids:
         try:
@@ -780,7 +780,7 @@ def run_tailor_settings(stack) -> str:
         f"cover_letter: {'on' if b['cover_letter'] else 'off'}   max_pages: {b['max_pages']}   paper: {b.get('paper', 'a4')}   model: {b['model']}",
         f"style_notes:  {b.get('style_notes') or 'none'}   (tone and wording preferences; never lets the writing add facts)",
         f"fact check:   {'on' if b.get('verify', True) else 'off'} ({b.get('verify_model')})",
-        f"engine:       {b.get('engine', 'v1')}   (v1 is today's writer; v2 is the newer one: `tailor-compare N` shows both side by side)",
+        f"engine:       v2   (the only writer; `tailor-compare N` tries it on a job without saving anything)",
         f"v2 options:   gap_policy {b.get('gap_policy', 'omit')}, cover_style {b.get('cover_style', 'evidence')}, tone {b.get('tone', 'direct')}, "
         f"reviewer {'on' if b.get('reviewer', True) else 'off'} ({b.get('reviewer_model', 'claude-haiku-5-5')}), "
         f"company_research {'on' if b.get('company_research', True) else 'off'}   (they matter only while the engine is v2)"])
@@ -1660,9 +1660,8 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("job_id", nargs="?", type=int)
     t.add_argument("--limit", type=int, help="how many jobs when no id is given (default: the tailor schedule's batch)")
 
-    tc = sub.add_parser("tailor-compare", help="tailor jobs with two engines side by side into output/compare (saves no application)")
+    tc = sub.add_parser("tailor-compare", help="try the tailoring on jobs, into output/compare (saves no application)")
     tc.add_argument("job_ids", nargs="+", type=int)
-    tc.add_argument("--engines", default="v1,v2", help="comma-separated: v1 (today's writer), v2 (adds the gap policy). Default v1,v2")
 
     sub.add_parser("review", help="applications waiting for your decision")
     for name in ("approve", "skip", "applied"):
@@ -1756,7 +1755,7 @@ def build_parser() -> argparse.ArgumentParser:
     ts.add_argument("--model", help="model for the resume patch and cover letter")
     ts.add_argument("--paper", choices=["a4", "letter"], help="page size of the PDFs")
     ts.add_argument("--style-notes", help="tone and wording preferences, at most 400 characters, or none to clear")
-    ts.add_argument("--engine", choices=["v1", "v2"], help="v1 is today's writer (the default); v2 is the newer one: compare first with `tailor-compare`")
+    ts.add_argument("--engine", choices=["v2"], help="v2 is the only writer (v1 was retired)")
     ts.add_argument("--gap-policy", choices=["omit", "bridge"], help="v2: omit (the letter never mentions a gap) or bridge ('My closest work is...')")
     ts.add_argument("--cover-style", choices=["evidence", "classic"], help="v2: the letter's shape")
     ts.add_argument("--tone", choices=["formal", "direct", "conversational"], help="v2: the letter's tone")
@@ -1804,7 +1803,7 @@ def main(argv=None, stack=None, stdin=None) -> int:
             print(run_tailor(stack, args.job_id, args.limit))
             return 0
         if args.cmd == "tailor-compare":
-            print(run_tailor_compare(stack, args.job_ids, [e.strip() for e in args.engines.split(",") if e.strip()]))
+            print(run_tailor_compare(stack, args.job_ids, list(TAILOR_ENGINES)))
             return 0
         if args.cmd == "review":
             print(run_review(stack))

@@ -590,22 +590,21 @@ def hedged_patch():
 
 def test_a_comparison_writes_only_under_compare_and_saves_nothing(tmp_path):
     store, ai = FakeStore(), ScriptedAI(patch(), patch())
-    out = service(tmp_path, store, ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    out = service(tmp_path, store, ai).compare_job(JOB_ROW, ("v2",), SETTINGS)
     assert store.saved == [] and store.failures == [] and store.released == [] and store.claims == []
     root = tmp_path / "compare" / "24-globex-senior-backend-engineer"
-    assert {p.name for p in root.iterdir()} == {"v1", "v2", "compare.md"} and not (tmp_path / "applications").exists()
-    for e in ("v1", "v2"):
-        assert {p.name for p in (root / e).iterdir()} == FILES
+    assert {p.name for p in root.iterdir()} == {"v2", "compare.md"} and not (tmp_path / "applications").exists()
+    assert {p.name for p in (root / "v2").iterdir()} == FILES
     assert out["folder"] == str(root) and out["compare_md"] == str(root / "compare.md")
-    assert {e: r["status"] for e, r in out["runs"].items()} == {"v1": "compared", "v2": "compared"}
+    assert {e: r["status"] for e, r in out["runs"].items()} == {"v2": "compared"}
     assert all("patch" not in r and "requirement_list" not in r for r in out["runs"].values())      # the reply stays small
-    assert out["cost_usd"] == pytest.approx(0.0246)
+    assert out["cost_usd"] == pytest.approx(0.0123)
 
 
 def test_a_comparison_is_logged_under_its_own_purpose_so_it_is_never_mistaken_for_real_tailoring(tmp_path):
     store = FakeStore()
-    service(tmp_path, store, ScriptedAI(patch(), patch())).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
-    assert [u["purpose"] for u in store.usage] == ["tailor_compare", "tailor_compare"]
+    service(tmp_path, store, ScriptedAI(patch())).compare_job(JOB_ROW, ("v2",), SETTINGS)
+    assert [u["purpose"] for u in store.usage] == ["tailor_compare"]
     store2 = FakeStore()
     svc = service(tmp_path, store2, ScriptedAI(patch()))
     svc.run_job(JOB_ROW, SETTINGS)
@@ -615,14 +614,8 @@ def test_a_comparison_is_logged_under_its_own_purpose_so_it_is_never_mistaken_fo
 def test_the_fact_check_of_a_comparison_has_its_own_purpose_too(tmp_path):
     store = FakeStore()
     ai = ScriptedAI(patch(), {"flagged": []})
-    service(tmp_path, store, ai).compare_job(JOB_ROW, ("v1",), dict(SETTINGS, verify=True))
+    service(tmp_path, store, ai).compare_job(JOB_ROW, ("v2",), dict(SETTINGS, verify=True))
     assert [u["purpose"] for u in store.usage] == ["tailor_compare", "tailor_compare_verify"]
-
-
-def test_each_engine_gets_its_own_prompt_and_only_v2_has_the_gap_policy(tmp_path):
-    ai = ScriptedAI(patch(), patch())
-    service(tmp_path, ai=ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
-    assert "GAP POLICY" not in ai.calls[0]["system"] and "GAP POLICY" in ai.calls[1]["system"]
 
 
 def test_the_v2_draft_that_confesses_is_revised_and_the_revision_is_told_why(tmp_path):
@@ -643,17 +636,10 @@ def test_a_confession_that_survives_the_revision_is_cut_out_by_the_repair(tmp_pa
     assert "upfront" not in letter and "evaluation harnesses" not in letter and "grow into that work" in letter
 
 
-def test_v1_keeps_doing_exactly_what_it_did_so_the_comparison_is_fair(tmp_path):
-    ai = ScriptedAI(hedged_patch())
-    out = service(tmp_path, ai=ai).compare_job(JOB_ROW, ("v1",), SETTINGS)
-    assert len(ai.calls) == 1 and out["runs"]["v1"]["audit"]["rejected"] == []
-    assert "I should be upfront" in (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "v1" / "patch.json").read_text()
-
-
-def test_a_budget_pause_stops_before_the_second_engine_spends_anything(tmp_path):
+def test_a_budget_pause_in_a_comparison_spends_nothing(tmp_path):
     store, ai = FakeStore(budget={"day_remaining": 0.0001, "month_remaining": 10}), ScriptedAI(patch(), patch())
-    out = service(tmp_path, store, ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
-    assert list(out["runs"]) == ["v1"] and out["runs"]["v1"]["status"] == "budget_paused" and ai.calls == [] and store.usage == []
+    out = service(tmp_path, store, ai).compare_job(JOB_ROW, ("v2",), SETTINGS)
+    assert list(out["runs"]) == ["v2"] and out["runs"]["v2"]["status"] == "budget_paused" and ai.calls == [] and store.usage == []
     assert out["compare_md"] is None and not (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").exists()
     assert store.released == [] and store.failures == []                              # nothing that belongs to the schedule was touched
 
@@ -661,48 +647,38 @@ def test_a_budget_pause_stops_before_the_second_engine_spends_anything(tmp_path)
 def test_an_api_failure_in_a_comparison_leaves_the_schedules_counters_alone(tmp_path):
     store = FakeStore()
     ai = ScriptedAI(A.AnthropicError("overloaded", 529, retryable=True))
-    out = service(tmp_path, store, ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
-    assert out["runs"]["v1"]["status"] == "api_error" and list(out["runs"]) == ["v1"] and ai.calls and len(ai.replies) == 0
+    out = service(tmp_path, store, ai).compare_job(JOB_ROW, ("v2",), SETTINGS)
+    assert out["runs"]["v2"]["status"] == "api_error" and list(out["runs"]) == ["v2"] and ai.calls and len(ai.replies) == 0
     assert store.failures == [] and store.released == [] and store.saved == []
-
-
-def test_a_second_engine_that_fails_is_reported_in_compare_md_and_the_first_still_shows(tmp_path):
-    out = service(tmp_path, ai=ScriptedAI(patch(), A.AnthropicError("overloaded", 529, retryable=True))).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
-    assert out["runs"]["v1"]["status"] == "compared" and out["runs"]["v2"]["status"] == "api_error"
-    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
-    letters = md.split("## Cover letter")[1].split("## Headline")[0]
-    assert "v2 did not finish: api_error" in md and "### v1" in letters and "### v2" not in letters
 
 
 def test_bad_engine_lists_are_refused_before_anything_is_spent(tmp_path):
     store, ai = FakeStore(), ScriptedAI(patch())
     svc = service(tmp_path, store, ai)
-    for bad in ((), ("v3",), ("v1", "x")):
+    for bad in ((), ("v3",), ("v1",), ("v1", "v2"), ("v1", "x")):                                   # v1 was retired: it cannot be asked for
         with pytest.raises(ValueError):
             svc.compare_job(JOB_ROW, bad, SETTINGS)
     assert ai.calls == [] and store.usage == [] and not (tmp_path / "compare").exists()
-    assert list(svc.compare_job(JOB_ROW, ("v1", "v1"), SETTINGS)["runs"]) == ["v1"] and len(ai.calls) == 1      # a duplicate is one run
+    assert list(svc.compare_job(JOB_ROW, ("v2", "v2"), SETTINGS)["runs"]) == ["v2"] and len(ai.calls) == 1      # a duplicate is one run
 
 
-def test_compare_md_puts_the_two_letters_and_the_numbers_side_by_side(tmp_path):
+def test_compare_md_puts_the_letter_and_the_numbers_in_one_page(tmp_path):
     ai = ScriptedAI(hedged_patch(), patch())
-    service(tmp_path, ai=ai).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+    service(tmp_path, ai=ai).compare_job(JOB_ROW, ("v2",), SETTINGS)
     md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
     for needle in ("# Compare: Senior Backend Engineer at Globex (job 24)", "Nothing here was saved as an application", "## At a glance",
-                   "| | v1 | v2 |", "| cost |", "| cover letter words |", "## Cover letter", "### v1", "### v2", "I should be upfront",
+                   "| | v2 |", "| cost |", "| cover letter words |", "## Cover letter", "### v2",
                    "## Headline and summary", "## Reworded bullets", "was: Eliminated duplicate LLM billing", "## Requirement coverage (private notes)",
                    "**gap**: Kafka", "## What the checks found"):
         assert needle in md, needle
-    v1_letter = md.split("### v1")[1].split("### v2")[0]
     v2_letter = md.split("### v2")[1].split("## Headline")[0]
-    assert "upfront" in v1_letter and "upfront" not in v2_letter
+    assert "upfront" not in v2_letter                                      # the confession was revised away
 
 
-def test_the_v2_summary_keeps_gaps_for_the_candidate_and_v1_is_unchanged(tmp_path):
-    out = service(tmp_path, ai=ScriptedAI(patch(), patch())).compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
+def test_the_summary_keeps_gaps_for_the_candidate(tmp_path):
+    out = service(tmp_path, ai=ScriptedAI(patch())).compare_job(JOB_ROW, ("v2",), SETTINGS)
     root = tmp_path / "compare" / "24-globex-senior-backend-engineer"
-    v1, v2 = (root / "v1" / "summary.md").read_text(), (root / "v2" / "summary.md").read_text()
-    assert "## Gaps and bridges (private notes" not in v1 and "## Requirement coverage" in v1
+    v2 = (root / "v2" / "summary.md").read_text()
     assert "## Gaps and bridges (private notes: none of this is in the letter or the summary)" in v2
     assert "- **gap**: Kafka (not in my resume)" in v2 and out["runs"]["v2"]["requirements"]["gap"] == 1
 
@@ -740,28 +716,28 @@ class FlakyPDF(FakePDF):
         return super().html_to_pdf(html)
 
 
-def test_a_failure_in_the_second_engine_keeps_the_first_and_reports_what_was_spent(tmp_path):
+def test_a_failure_after_the_draft_was_paid_reports_what_was_spent(tmp_path):
     store = FakeStore()
-    svc = service(tmp_path, store, ScriptedAI(patch(), patch()), FlakyPDF(ok=2))        # v1 renders resume + letter, v2 fails on its resume
-    out = svc.compare_job(JOB_ROW, ("v1", "v2"), SETTINGS)
-    assert out["runs"]["v1"]["status"] == "compared" and out["runs"]["v2"]["status"] == "failed"
+    svc = service(tmp_path, store, ScriptedAI(patch()), FlakyPDF(ok=0))                  # the draft is paid for, then the render service falls over
+    out = svc.compare_job(JOB_ROW, ("v2",), SETTINGS)
+    assert out["runs"]["v2"]["status"] == "failed"
     assert "RuntimeError: the PDF service went away" in out["runs"]["v2"]["reason"]
-    assert out["runs"]["v2"]["cost_usd"] == pytest.approx(0.0123) and out["cost_usd"] == pytest.approx(0.0246)       # the paid draft is not hidden
-    md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
-    assert "v2 did not finish: failed: RuntimeError" in md and store.saved == [] and store.failures == []
+    assert out["runs"]["v2"]["cost_usd"] == pytest.approx(0.0123) and out["cost_usd"] == pytest.approx(0.0123)       # the paid draft is not hidden
+    assert out["compare_md"] is None and not (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").exists()      # nothing to compare
+    assert store.saved == [] and store.failures == []
 
 
 def test_a_letter_containing_a_code_fence_cannot_break_out_of_the_comparison(tmp_path):
     p = patch()
     p["cover_letter"] = dict(p["cover_letter"], paragraphs=["I build Go services. ``` # not a heading ``` and more.", "I ran 50,000+ executions a day.", "I want to help your team."])
-    service(tmp_path, ai=ScriptedAI(p)).compare_job(JOB_ROW, ("v1",), SETTINGS)
+    service(tmp_path, ai=ScriptedAI(p)).compare_job(JOB_ROW, ("v2",), SETTINGS)
     md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
-    block = md.split("### v1")[1].split("## Headline")[0]
+    block = md.split("### v2")[1].split("## Headline")[0]
     assert "````\n" in block and block.count("````") == 2 and "# not a heading" in block        # a longer fence than the text's own
 
 
 def test_a_run_without_a_cover_letter_counts_zero_words_not_the_placeholder(tmp_path):
-    service(tmp_path, ai=ScriptedAI(patch(cover_letter=None))).compare_job(JOB_ROW, ("v1",), dict(SETTINGS, cover_letter=False))
+    service(tmp_path, ai=ScriptedAI(patch(cover_letter=None))).compare_job(JOB_ROW, ("v2",), dict(SETTINGS, cover_letter=False))
     md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
     assert "| cover letter words | 0 |" in md
 
@@ -774,7 +750,7 @@ def test_compare_md_names_the_engines_of_this_run_and_a_base_resume_job(tmp_path
 
 
 def test_an_unscored_job_is_shown_as_not_scored(tmp_path):
-    service(tmp_path, ai=ScriptedAI(patch())).compare_job(dict(JOB_ROW, score=None, verdict=None), ("v1",), SETTINGS)
+    service(tmp_path, ai=ScriptedAI(patch())).compare_job(dict(JOB_ROW, score=None, verdict=None), ("v2",), SETTINGS)
     md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
     assert "- Score: not scored (no verdict)" in md
 
@@ -865,9 +841,8 @@ def test_the_reviewer_uses_its_own_model_prompt_and_a_fenced_posting(tmp_path):
     assert "cover letter paragraph 2: - Scale:" in call["user"] and "bullet w1-b1:" in call["user"]
 
 
-@pytest.mark.parametrize("setting", [dict(reviewer=False), dict(engine="v1")])
-def test_no_reviewer_call_when_it_is_off_or_the_engine_is_v1(tmp_path, setting):
-    _, store, ai, r = run_v2(tmp_path, evidence_patch() if setting.get("engine") != "v1" else patch(), settings=dict(V2S, **setting))
+def test_no_reviewer_call_when_it_is_off(tmp_path):
+    _, store, ai, r = run_v2(tmp_path, evidence_patch(), settings=dict(V2S, reviewer=False))
     assert len(ai.calls) == 1 and [u["purpose"] for u in store.usage] == ["tailor"] and "review" not in r["audit"]
 
 
@@ -922,13 +897,6 @@ def test_proof_points_reach_the_prompt_the_audit_and_the_fact_check(tmp_path):
     assert "MORE FACTS THE CANDIDATE CONFIRMED" in ai.calls[2]["system"] and "99.9% uptime over 12 months" in ai.calls[2]["system"]
     _, _, ai2, r2 = run_v2(tmp_path, p, review_reply(), verify, settings=dict(V2S, verify=True))     # without them the same number is invented
     assert len(ai2.calls) >= 2 and "PROOF POINTS" not in ai2.calls[0]["system"]
-
-
-def test_the_proof_points_are_not_used_by_v1(tmp_path):
-    pts = V2.validate_proof_points([{"id": "pp-1", "bullet": "w1-b2", "project": "Billing safety", "role": "built", "what": "Made retries idempotent.",
-                                     "metric": "", "tech": [], "evidence": ""}], set(T.resume_index(RESUME)))[0]
-    _, _, ai, _ = run_v2(tmp_path, patch(), settings=dict(V2S, engine="v1"), proof_points=pts)
-    assert "PROOF POINTS" not in ai.calls[0]["system"]
 
 
 # ---- company facts
@@ -991,10 +959,7 @@ def test_company_research_off_or_a_store_without_the_cache_costs_and_does_nothin
     assert r2["status"] == "drafted" and len(ai2.calls) == 1
 
 
-def test_company_research_never_runs_for_v1_and_a_failure_in_it_never_stops_tailoring(tmp_path):
-    _, _, ai, _ = run_v2(tmp_path, patch(), store=NotesStore(), settings=dict(CO, engine="v1"), company_fetch=lambda d: pytest.fail("fetched"))
-    assert len(ai.calls) == 1
-
+def test_a_failure_in_company_research_never_stops_tailoring(tmp_path):
     def boom(domain):
         raise RuntimeError("network down")
     _, _, ai2, r2 = run_v2(tmp_path, evidence_patch(), store=NotesStore(), settings=CO, company_fetch=boom)
@@ -1057,13 +1022,10 @@ def test_v2_drops_the_least_relevant_older_bullets_before_shrinking_the_type_bel
     assert "w2-b1" in spec["order"] and len(spec["order"]) < 5 and next(w for w in saved["work"] if w["id"] == "w1")["order"]      # main role untouched
 
 
-def test_v1_never_cuts_bullets_to_fit_and_a_page_that_already_fits_is_left_alone(tmp_path):
+def test_a_page_that_already_fits_is_left_alone(tmp_path):
     resume = many_bullets_resume()
     p = patch()
     p["work"][1]["order"] = ["w2-b1"] + [f"w2-x{i}" for i in range(1, 5)]
-    store = FakeStore()
-    S.TailorService(store, ScriptedAI(p), SizedPDF(cap=300), tmp_path, resume, PROFILE).run_job(JOB_ROW, dict(V2S, engine="v1", reviewer=False, max_pages=1))
-    assert len(next(w for w in store.saved[0][5]["work"] if w["id"] == "w2")["order"]) == 5
     store2 = FakeStore()
     r = S.TailorService(store2, ScriptedAI(p), FakePDF(), tmp_path / "c", resume, PROFILE).run_job(JOB_ROW, dict(V2S, reviewer=False, max_pages=1))
     assert not any("less relevant bullet" in n for n in r["notes"])
@@ -1083,14 +1045,12 @@ def test_the_v2_run_reports_keywords_and_emphasises_the_supported_ones_the_draft
     assert set(kw["low"]) <= set(emphasised) and "Kafka" not in emphasised                # only what the resume really has
     md = (tmp_path / "applications" / "24-globex-senior-backend-engineer" / "summary.md").read_text()
     assert "## Keyword coverage" in md and "Kafka" in md
-    r1 = S.TailorService(FakeStore(), ScriptedAI(patch()), FakePDF(), tmp_path / "v1", RESUME, PROFILE).run_job(row, dict(V2S, engine="v1"))
-    assert "keywords" not in r1["audit"]
 
 
 def test_compare_md_shows_the_reviewer_row_and_the_keyword_section(tmp_path):
-    service(tmp_path, ai=ScriptedAI(patch(), evidence_patch(), review_reply(one_edit()))).compare_job(JOB_ROW, ("v1", "v2"), V2S)
+    service(tmp_path, ai=ScriptedAI(evidence_patch(), review_reply(one_edit()))).compare_job(JOB_ROW, ("v2",), V2S)
     md = (tmp_path / "compare" / "24-globex-senior-backend-engineer" / "compare.md").read_text()
-    assert "| reviewer edits applied / set aside | 0 / 0 | 1 / 0 |" in md and "## Keyword coverage" in md and "(only the v2 engine reports this)" in md
+    assert "| reviewer edits applied / set aside | 1 / 0 |" in md and "## Keyword coverage" in md
 
 
 # ---- second review: cover-only, spend accounting

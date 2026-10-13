@@ -359,11 +359,11 @@ OLD_TAILOR = {"mode": "auto", "min_score": None, "max_score": None, "daily_limit
               "cover_letter": True, "max_pages": 1, "verify": True, "verify_model": "claude-haiku-5-5", "paper": "a4", "style_notes": None}
 
 
-def test_tailor_settings_of_an_old_database_say_engine_v1_and_the_defaults(conns, monkeypatch):
+def test_tailor_settings_of_an_old_database_say_engine_v2_and_the_defaults(conns, monkeypatch):
     conns.fail_on = ("engine, gap_policy", psycopg.errors.UndefinedColumn('column "engine" does not exist'))
     monkeypatch.setattr(FakeCursor, "fetchone", lambda self: dict(OLD_TAILOR))
     s = db.PgStore("").tailor_settings()
-    assert s["engine"] == "v1" and s["gap_policy"] == "omit" and s["cover_style"] == "evidence" and s["tone"] == "direct"
+    assert s["engine"] == "v2" and s["gap_policy"] == "omit" and s["cover_style"] == "evidence" and s["tone"] == "direct"
     assert s["reviewer"] is True and s["reviewer_model"] == "claude-haiku-5-5" and s["company_research"] is True and s["mode"] == "auto"
     assert conns.opened[0].exit_exc is psycopg.errors.UndefinedColumn and conns.opened[0].closed        # the failed attempt was rolled back
 

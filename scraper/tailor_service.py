@@ -229,7 +229,7 @@ class TailorService:
 
     # ------------------------------------------------------------ comparing engines
 
-    def compare_job(self, job: dict, engines=("v1", "v2"), settings: Optional[dict] = None) -> dict:
+    def compare_job(self, job: dict, engines=("v2",), settings: Optional[dict] = None) -> dict:
         """Tailor one job with each engine into output/compare/<job>/<engine>/ and write compare.md next to them. Nothing else is
         written: no application, no status, no claim, no message. The model is paid for (twice for two engines) under the usage
         purpose `tailor_compare`, inside the same budget guard and caps. Returns the per-engine results and the folder."""
@@ -595,7 +595,7 @@ def _coverage_counts(requirements: list) -> dict:
     return c
 
 
-def _summary_md(job, variant, requirements, patch, resume, audit_dict, notes, attention, engine: str = "v1") -> str:
+def _summary_md(job, variant, requirements, patch, resume, audit_dict, notes, attention, engine: str = "v2") -> str:
     idx = tailor.resume_index(resume)
     lines = [f"# {job.get('title')} at {job.get('company')}", "",
              f"- Score: {job.get('score')} ({job.get('verdict')})", f"- Variant: {variant}",

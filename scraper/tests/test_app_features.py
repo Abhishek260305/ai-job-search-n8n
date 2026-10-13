@@ -732,11 +732,11 @@ def test_the_v2_settings_are_parsed_like_the_others():
                                   "reviewer": False, "company_research": True, "reviewer_model": "claude-haiku-5-5"}) == {
         "engine": "v2", "gap_policy": "bridge", "cover_style": "classic", "tone": "conversational", "reviewer": False,
         "company_research": True, "reviewer_model": "claude-haiku-5-5"}
-    for bad in ({"engine": "v3"}, {"gap_policy": "hide"}, {"cover_style": "fancy"}, {"tone": "rude"}, {"reviewer": "maybe"}, {"reviewer_model": "x"}, {"company_research": "perhaps"}):
+    for bad in ({"engine": "v3"}, {"engine": "v1"}, {"gap_policy": "hide"}, {"cover_style": "fancy"}, {"tone": "rude"}, {"reviewer": "maybe"}, {"reviewer_model": "x"}, {"company_research": "perhaps"}):
         with pytest.raises(ValueError):
             TB.normalise_settings({k: (v if not isinstance(v, bool) else v) for k, v in bad.items()})
-    assert "engine: v1" in TB.settings_text({"mode": "auto", "approval": "review", "min_score": None, "max_score": None, "daily_limit": None,
-                                             "cover_letter": True, "max_pages": 1, "model": "m"})
+    assert "engine: v2" in TB.settings_text({"mode": "auto", "approval": "review", "min_score": None, "max_score": None, "daily_limit": None,
+                                             "cover_letter": True, "max_pages": 1, "model": "m", "engine": "v1"})       # an old stored value shows as what runs
     assert "engine: v2" in TB.settings_text({"mode": "auto", "approval": "review", "min_score": None, "max_score": None, "daily_limit": None,
                                              "cover_letter": True, "max_pages": 1, "model": "m", "engine": "v2"})
 

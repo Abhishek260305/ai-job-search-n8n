@@ -250,12 +250,6 @@ def test_inflated_experience_is_rejected_everywhere():
     assert ("summary", "years") in kinds and ("cover letter paragraph 1", "years") in kinds
 
 
-def test_an_honest_duration_is_fine():
-    p = T.validate_patch(good(), RESUME)
-    p["summary"] = "Backend engineer with about 1 year of experience building platforms."
-    assert aud(p).ok
-
-
 def test_invented_numbers_in_the_cover_letter_are_hard_but_posting_only_ones_are_soft():
     p = T.validate_patch(good(), RESUME)
     p["cover_letter"]["paragraphs"][1] = "At Acme I served 9000 customers daily."
@@ -455,20 +449,6 @@ def test_real_problems_are_not_mistaken_for_self_contradictions(reason):
 
 # ------------------------------------------------------------------ fewer false alarms
 
-@pytest.mark.parametrize("sentence", [
-    "I have about a year of experience, not the three years you ask for.",
-    "The posting asks for three years of experience and I am closing that gap quickly.",
-    "I am short of the 3 years the role requires.",
-    "I don't yet have five years of experience.",
-])
-def test_acknowledging_a_gap_is_soft_not_an_inflated_claim(sentence):
-    p = T.validate_patch(good(), RESUME)
-    p["cover_letter"]["paragraphs"][0] = sentence
-    a = aud(p)
-    assert a.ok, a.hard
-    assert any(v["kind"] == "years" for v in a.soft)
-
-
 @pytest.mark.parametrize("sentence", ["I bring three years of experience to this role.", "With 5 years of experience, I lead platform work.",
                                        "I have ten years building backend systems."])
 def test_a_real_inflated_claim_is_still_hard(sentence):
@@ -540,21 +520,18 @@ def aud2(patch):
     return T.audit(RESUME, patch, JOB, PROFILE, engine="v2")
 
 
-def test_the_default_engine_is_v1_and_unknown_values_are_errors_not_guesses():
-    assert T.engine_options(None) == ("v1", "omit") and T.engine_options({}) == ("v1", "omit")
+def test_v2_is_the_only_writer_an_old_v1_value_runs_as_v2_and_unknown_values_are_errors_not_guesses():
+    assert T.ENGINES == ("v2",) and T.DEFAULT_ENGINE == "v2"
+    assert T.engine_options(None) == ("v2", "omit") and T.engine_options({}) == ("v2", "omit")
     assert T.engine_options({"engine": "v2", "gap_policy": "bridge"}) == ("v2", "bridge")
+    assert T.engine_options({"engine": "v1"}) == ("v2", "omit")                           # a row stored before v1 was retired
     for bad in ({"engine": "v3"}, {"engine": "V2"}, {"gap_policy": "hide"}):
         with pytest.raises(ValueError):
             T.engine_options(bad)
     with pytest.raises(ValueError):
         T.build_system(RESUME, PROFILE, engine="v3")
-
-
-def test_the_v1_prompt_is_what_it_always_was():
-    s = T.build_system(RESUME, PROFILE)
-    assert s == T.build_system(RESUME, PROFILE, engine="v1") and "GAP POLICY" not in s and "private notes" not in s
-    assert s.count("Never hide a gap.") == 1 and "say so plainly" in s
-    assert T.prepare(RESUME, PROFILE, JOB)["system"] == T.prepare(RESUME, PROFILE, JOB, engine="v1", gap_policy="bridge")["system"]    # policy is a v2 notion
+    assert T.build_system(RESUME, PROFILE, engine="v1") == T.build_system(RESUME, PROFILE, engine="v2")      # v1 cannot be asked for: it is v2
+    assert T.audit(RESUME, T.validate_patch(good(), RESUME), JOB, PROFILE, engine="v1").ok == T.audit(RESUME, T.validate_patch(good(), RESUME), JOB, PROFILE, engine="v2").ok
 
 
 def test_the_v2_prompt_says_the_table_is_private_and_the_letter_never_confesses():
@@ -648,10 +625,9 @@ def test_each_hit_is_the_phrase_as_written_and_one_hit_per_sentence():
     assert all(h in text for h in hits)
 
 
-def test_v2_audit_rejects_a_letter_that_volunteers_a_weakness_but_v1_does_not():
+def test_the_audit_rejects_a_letter_that_volunteers_a_weakness():
     p = T.validate_patch(good(), RESUME)
     p["cover_letter"]["paragraphs"][2] = HEDGED[0]
-    assert aud(p).ok                                         # v1: exactly as before
     a = aud2(p)
     assert not a.ok
     hit = [v for v in a.hard if v["kind"] == "gap_disclosure"]
@@ -663,7 +639,6 @@ def test_v2_audit_rejects_a_summary_that_hedges():
     p["summary"] = "Early-career backend engineer who builds multi-tenant platforms in Go."
     a = aud2(p)
     assert [v for v in a.hard if v["where"] == "summary" and v["kind"] == "gap_disclosure"]
-    assert aud(p).ok
 
 
 def test_the_good_patch_passes_the_v2_audit_untouched():
@@ -738,7 +713,7 @@ def test_the_v2_audit_also_reads_the_headline_and_the_greeting():
     p["headline"] = "Junior Backend Engineer"
     p["cover_letter"]["greeting"] = "Dear Hiring Manager, I am a junior engineer,"
     wheres = {v["where"] for v in aud2(p).hard if v["kind"] == "gap_disclosure"}
-    assert wheres == {"headline", "cover letter greeting"} and aud(p).ok            # v1 does not care
+    assert wheres == {"headline", "cover letter greeting"} 
     repaired, _ = T.repair(p, aud2(p))
     assert repaired["headline"] is None and repaired["cover_letter"]["greeting"] == "Dear Hiring Manager," and aud2(repaired).ok
 
@@ -798,16 +773,14 @@ def test_the_v2_prompt_names_the_employer_first_and_keeps_places_out_of_the_lett
     s = T.build_system(RESUME, PROFILE, engine="v2")
     assert "OPENING AND PLACE" in s and "names the employer and the role" in s and "Do not mention any city, country or work location" in s
     assert 'do not start a sentence with "That", "This"' in s
-    assert "OPENING AND PLACE" not in T.build_system(RESUME, PROFILE) and "OPENING AND PLACE" not in T.build_system(RESUME, PROFILE, engine="v2", cover_letter=False)
+    assert "OPENING AND PLACE" not in T.build_system(RESUME, PROFILE, engine="v2", cover_letter=False)
 
 
 def test_a_city_from_the_postings_location_line_is_a_soft_note_under_v2_not_an_invented_name():
     job = dict(JOB, location="Mumbai, Maharashtra, India")
     p = T.validate_patch(good(), RESUME)
     p["cover_letter"]["paragraphs"][0] += " I would be glad to work from Mumbai."
-    v1 = T.audit(RESUME, p, job, PROFILE)
     v2 = T.audit(RESUME, p, job, PROFILE, engine="v2")
-    assert any(v["token"] == "Mumbai" for v in v1.hard)                                  # v1 is unchanged: hard
     assert not any(v["token"] == "Mumbai" for v in v2.hard) and any(v["token"] == "Mumbai" for v in v2.soft)
 
 
@@ -817,7 +790,6 @@ def test_a_letter_that_never_names_the_employer_is_flagged_softly_under_v2():
     p["cover_letter"]["paragraphs"] = [x.replace("Globex", "your company") for x in p["cover_letter"]["paragraphs"]]
     a = aud2(p)
     assert a.ok and [v for v in a.soft if v["kind"] == "employer" and v["where"] == "cover letter"]
-    assert not [v for v in aud(p).soft if v["kind"] == "employer"]                      # v1 does not ask
 
 
 @pytest.mark.parametrize("company,named", [("Globex", True), ("Globex Pvt Ltd", True), ("The Globex Group", True), ("Acme Technologies", False), ("Inc", True)])
@@ -907,7 +879,6 @@ def test_a_gap_still_carries_no_evidence_even_if_the_model_gave_one():
     assert T.validate_patch(p, RESUME)["requirements"][1]["evidence"] is None
 
 
-def test_only_the_v2_prompt_teaches_the_two_section_names():
-    v2, v1 = T.build_system(RESUME, PROFILE, engine="v2"), T.build_system(RESUME, PROFILE)
+def test_the_prompt_teaches_the_two_section_names():
+    v2 = T.build_system(RESUME, PROFILE, engine="v2")
     assert 'for a degree cite "education"' in v2 and 'cite "skills"' in v2 and "never matched" in v2
-    assert "education" not in v1.split("REQUIREMENTS COVERAGE")[1].split("STYLE")[0]

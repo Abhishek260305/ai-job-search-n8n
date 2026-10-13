@@ -204,7 +204,7 @@ class PgStore:
     # ---- tailoring, review, telegram -----------------------------------------------------
     _TAILOR_BASE = "mode, min_score, max_score, daily_limit, approval, model, cover_letter, max_pages, verify, verify_model, paper, style_notes"
     _TAILOR_V2 = "engine, gap_policy, cover_style, tone, reviewer, reviewer_model, company_research"
-    _TAILOR_V2_DEFAULTS = {"engine": "v1", "gap_policy": "omit", "cover_style": "evidence", "tone": "direct", "reviewer": True,
+    _TAILOR_V2_DEFAULTS = {"engine": "v2", "gap_policy": "omit", "cover_style": "evidence", "tone": "direct", "reviewer": True,
                            "reviewer_model": "claude-haiku-5-5", "company_research": True}
 
     def tailor_settings(self) -> dict:
@@ -213,7 +213,7 @@ class PgStore:
                 cur.execute(f"SELECT {self._TAILOR_BASE}, {self._TAILOR_V2} FROM tailor_settings WHERE id = 1")
                 return cur.fetchone()
         except psycopg.errors.UndefinedColumn:
-            # migration 026 is not applied yet: the engine is v1, whatever else the defaults say. (The failed statement aborted that
+            # migration 026 is not applied yet: the defaults stand in for the v2 settings. (The failed statement aborted that
             # transaction, and leaving the `with` rolled it back, so the next one starts clean.)
             with self.cursor() as cur:
                 cur.execute(f"SELECT {self._TAILOR_BASE} FROM tailor_settings WHERE id = 1")

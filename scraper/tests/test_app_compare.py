@@ -62,11 +62,11 @@ def errors(r):
     return " ".join(r.json()["detail"]["errors"])
 
 
-def test_a_comparison_runs_both_engines_by_default(env):
+def test_a_try_out_runs_the_only_writer_by_default(env):
     c = env()
     r = c.post("/tailor/compare", json={"job_id": 7})
-    assert r.status_code == 200 and c.service.calls == [(7, ["v1", "v2"])]
-    assert r.json()["compare_md"].endswith("compare.md") and list(r.json()["runs"]) == ["v1", "v2"] and not A._tailor_lock.locked()
+    assert r.status_code == 200 and c.service.calls == [(7, ["v2"])]
+    assert r.json()["compare_md"].endswith("compare.md") and list(r.json()["runs"]) == ["v2"] and not A._tailor_lock.locked()
 
 
 def test_one_engine_can_be_asked_for_and_a_duplicate_is_one(env):
@@ -74,11 +74,11 @@ def test_one_engine_can_be_asked_for_and_a_duplicate_is_one(env):
     assert c.post("/tailor/compare", json={"job_id": 7, "engines": ["v2", "v2"]}).status_code == 200 and c.service.calls == [(7, ["v2"])]
 
 
-@pytest.mark.parametrize("engines", [[], ["v3"], ["v1", "x"], ["V2"]])
+@pytest.mark.parametrize("engines", [[], ["v3"], ["v1"], ["v1", "v2"], ["v1", "x"], ["V2"]])
 def test_unknown_engines_are_refused_before_anything_else(env, engines):
     c = env()
     r = c.post("/tailor/compare", json={"job_id": 7, "engines": engines})
-    assert r.status_code == 422 and "engines must be some of v1, v2" in errors(r) and c.service.calls == []
+    assert r.status_code == 422 and "engines must be some of v2" in errors(r) and c.service.calls == []
 
 
 @pytest.mark.parametrize("body", [{}, {"job_id": 0}, {"job_id": "7"}, {"job_id": 7.5}, {"job_id": 2**63}, {"job_id": -1}, {"job_id": True}])
@@ -139,3 +139,30 @@ def test_a_scam_blocked_job_is_not_compared_either(env):
     c = env(Store(job=dict(JOB, status="scam_blocked")))
     r = c.post("/tailor/compare", json={"job_id": 7})
     assert r.status_code == 422 and "scam_blocked" in errors(r) and c.service.calls == []
+
+
+# ---- v1 was retired: no request can select it
+
+class SettingsStore(Store):
+    def __init__(self):
+        super().__init__()
+        self.updates = []
+
+    def update_tailor_settings(self, **fields):
+        self.updates.append(fields)
+        return dict(fields)
+
+
+@pytest.mark.parametrize("engine", ["v1", "V1", "v3", ""])
+def test_the_settings_endpoint_refuses_any_engine_but_v2_and_changes_nothing(env, engine):
+    store = SettingsStore()
+    c = env(store)
+    r = c.post("/tailor/settings", json={"engine": engine})
+    assert r.status_code == 422 and store.updates == []
+
+
+def test_the_settings_endpoint_accepts_v2(env):
+    store = SettingsStore()
+    c = env(store)
+    r = c.post("/tailor/settings", json={"engine": "v2"})
+    assert r.status_code == 200 and store.updates == [{"engine": "v2"}]

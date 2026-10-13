@@ -412,13 +412,13 @@ def test_the_estimate_uses_the_model_when_the_cover_letter_alone_needs_one_and_w
 
 def test_the_most_it_can_cost_is_what_the_guard_in_the_run_holds_back_so_the_two_agree_at_the_boundary(env):
     import budget
-    s = Store(); s.settings["verify"] = False
+    s = Store(); s.settings.update(verify=False, reviewer=False, company_research=False)       # the writer's own calls only
     worst = budget.worst_case_item_cost(PRICING, 6000 + 9000 * 2 + 9000, 6000)
     body = env(s).get("/tailor/estimate?job_id=7").json()
     assert body["at_most_usd"] == round(worst * 2, 4)
-    below = Store(); below.settings["verify"] = False; below.budget.update(day_remaining=worst * 2 - 0.0005)
+    below = Store(); below.settings.update(verify=False, reviewer=False, company_research=False); below.budget.update(day_remaining=worst * 2 - 0.0005)
     assert env(below).get("/tailor/estimate?job_id=7").json()["can_run"] is False
-    enough = Store(); enough.settings["verify"] = False; enough.budget.update(day_remaining=worst * 2 + 0.0005)
+    enough = Store(); enough.settings.update(verify=False, reviewer=False, company_research=False); enough.budget.update(day_remaining=worst * 2 + 0.0005)
     assert env(enough).get("/tailor/estimate?job_id=7").json()["can_run"] is True
 
 
@@ -433,15 +433,16 @@ def test_the_fact_check_call_is_part_of_the_most_it_can_cost_and_a_dear_checker_
     assert base < cheap < dear
 
 
-# ---- the "at most" the user agrees to counts the v2 engine's extra calls
+# ---- the "at most" the user agrees to counts the writer's extra calls
 
-def test_the_estimate_for_the_v2_engine_includes_the_reviewer_and_the_company_note(env):
-    base = env().get("/tailor/estimate?job_id=7").json()["at_most_usd"]
-    s2 = Store(); s2.settings.update(engine="v2", reviewer=True, company_research=True)
-    with_v2 = env(s2).get("/tailor/estimate?job_id=7").json()["at_most_usd"]
-    s3 = Store(); s3.settings.update(engine="v2", reviewer=False, company_research=False)
-    bare = env(s3).get("/tailor/estimate?job_id=7").json()["at_most_usd"]
-    assert with_v2 > bare >= base > 0
+def test_the_estimate_includes_the_reviewer_and_the_company_note(env):
+    full = Store(); full.settings.update(reviewer=True, company_research=True)
+    with_all = env(full).get("/tailor/estimate?job_id=7").json()["at_most_usd"]
+    only_reviewer = Store(); only_reviewer.settings.update(reviewer=True, company_research=False)
+    reviewer = env(only_reviewer).get("/tailor/estimate?job_id=7").json()["at_most_usd"]
+    bare = Store(); bare.settings.update(reviewer=False, company_research=False)
+    none = env(bare).get("/tailor/estimate?job_id=7").json()["at_most_usd"]
+    assert with_all > reviewer > none > 0
 
 
 def test_an_invalid_engine_in_the_settings_is_a_clear_refusal_not_a_crash(env):
