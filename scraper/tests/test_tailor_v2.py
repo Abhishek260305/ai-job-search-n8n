@@ -549,10 +549,10 @@ def test_ordinary_topic_words_in_a_bold_lead_are_not_flagged_but_a_tool_name_sti
 
 def test_the_keyword_report_ignores_line_starts_places_and_legal_boilerplate_but_keeps_technologies():
     job = dict(JOB, description="Requirements:\n- Clear communication with the team\n• Daily standups\nBring curiosity.\n"
-                                "We use Kafka and Terraform on AWS. We hire in Russia and the Czech Republic. Equal Opportunity Employer. See the Poster. Act now.")
+                                "We use Kafka and Terraform on AWS (e.g. in San Francisco, Acme Inc, see acme.com or Globex.com). Key Responsibilities include X. We hire in Russia and the Czech Republic. Equal Opportunity Employer. See the Poster. Act now.")
     r = T.keyword_report(RESUME, T.validate_patch(good(), RESUME), job)
     assert "Kafka" in r["missing"] and "Terraform" in r["missing"]
-    assert not {"Clear", "Daily", "Bring", "Russia", "Republic", "Poster", "Act", "Equal", "Opportunity"} & set(r["missing"])
+    assert not {"Clear", "Daily", "Bring", "Russia", "Republic", "Poster", "Act", "Equal", "Opportunity", "e.g", "Inc", "San", "Francisco", "Acme.com", "Globex.com", "Responsibilities"} & set(r["missing"])
 
 
 def test_the_title_case_scan_is_linear_so_a_huge_posting_is_not_a_slowdown():

@@ -1063,7 +1063,9 @@ _NOT_A_SKILL = frozenset("""russia republic poster act capital equal opportunity
 japan singapore ireland germany france spain italy canada australia brazil mexico poland czech netherlands israel dubai emirates arab saudi
 korea taiwan vietnam thailand malaysia indonesia philippines turkey ukraine romania hungary bulgaria portugal sweden norway denmark finland
 switzerland austria belgium london paris berlin dublin bangalore bengaluru hyderabad mumbai pune chennai delhi noida gurgaon gurugram
-california texas york seattle boston austin denver chicago toronto vancouver amsterdam""".split())
+california texas york seattle boston austin denver chicago toronto vancouver amsterdam san francisco angeles jose diego new inc ltd llc corp pte
+responsibilities requirements qualifications benefits overview preferred bonus about role skills experience e.g i.e etc""".split())
+_DOMAIN_NAME = re.compile(r"\.(?:com|org|net|io|ai|co|in|dev|app|us|uk|sg|ie|de)$", re.I)       # "LiveRamp.com" is the employer's address, not a technology
 
 
 def _mid_sentence_words(posting: str) -> set:
@@ -1105,7 +1107,7 @@ def keyword_report(resume: dict, patch: dict, job: dict) -> dict:
     mid = _mid_sentence_words(posting)
     for tok in _titlecase_claims(posting):
         lowered = tok.lower()
-        if lowered in vocab or lowered in own or lowered in _SAFE_TITLECASE or lowered in _NOT_A_SKILL:
+        if lowered in vocab or lowered in own or lowered in _SAFE_TITLECASE or lowered in _NOT_A_SKILL or _DOMAIN_NAME.search(tok):
             continue
         if not _is_technical(tok) and lowered not in mid:
             continue                    # a plain capitalised word only ever at the start of a line or sentence is not a technology
