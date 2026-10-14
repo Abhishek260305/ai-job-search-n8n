@@ -36,7 +36,9 @@ Commands:
   validate                validate config/profile.json, resume.json, search.json
   import-linkedin DIR     read a LinkedIn data export into clean JSON (whitelisted columns only)
   conflicts               compare config/resume.json with a LinkedIn import
-  push-config             copy profile.json and resume.json to the server when the stack runs on another machine
+  apply sheet             check config/apply.json (your facts for application forms): what is wrong, what is missing, what disagrees
+                          with your resume, and your years per skill as the resume's dates give them
+  push-config             copy profile.json, resume.json (and apply.json, proof_points.json) to the server when the stack runs elsewhere
   search-profile apply|show|pull   write config/search.json into the database / show what is stored / bring the file up
                           to date with the database (after the dashboard edited the profile)
   check                   scam + source check (and optional fit score) for one posting
@@ -62,6 +64,7 @@ from typing import Optional
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scraper"))
 
+import apply_sheet  # noqa: E402
 import profile_tools  # noqa: E402
 import safety  # noqa: E402
 import gmail_login  # noqa: E402
@@ -1141,7 +1144,8 @@ def schedule_changes(args) -> dict:
 
 # The two personal files the scraper container reads from its ./config mount. search.json is not here: it goes into the
 # database with `search-profile apply` (and the dashboard's Search page), the container never reads the file.
-CONFIG_PUSH_FILES = ("profile.json", "resume.json", "proof_points.json")
+CONFIG_PUSH_FILES = ("profile.json", "resume.json", "proof_points.json", "apply.json")
+OPTIONAL_CONFIG_FILES = ("proof_points.json", "apply.json")      # not having one is not worth a line
 
 
 def run_push_config(stack, repo: Path = REPO, dry_run: bool = False) -> str:
@@ -1154,7 +1158,7 @@ def run_push_config(stack, repo: Path = REPO, dry_run: bool = False) -> str:
     for name in CONFIG_PUSH_FILES:
         path = repo / "config" / name
         if not path.is_file():
-            if name != "proof_points.json":              # that one is optional: not having it is not worth a line
+            if name not in OPTIONAL_CONFIG_FILES:
                 lines.append(f"skipped {name}: {path} does not exist yet (run /setup, or copy config/{name.replace('.json', '.example.json')})")
             continue
         text = path.read_text(encoding="utf-8")
@@ -1164,6 +1168,10 @@ def run_push_config(stack, repo: Path = REPO, dry_run: bool = False) -> str:
                 resume_path = repo / "config" / "resume.json"
                 ids = set(tailor.resume_index(json.loads(resume_path.read_text(encoding="utf-8")))) if resume_path.is_file() else set()
                 _, problems = tailor_v2.validate_proof_points(data, ids)
+                if problems:
+                    raise ValueError("; ".join(problems[:3]))
+            elif name == "apply.json":
+                _, problems = apply_sheet.validate_fact_sheet(data)
                 if problems:
                     raise ValueError("; ".join(problems[:3]))
             else:
@@ -1580,6 +1588,61 @@ def render_check(res: dict) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------- apply assist: the fact sheet
+
+def _load_optional_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def run_apply_sheet(config_dir: Path, today=None) -> tuple[str, int]:
+    """Check config/apply.json against the schema, the resume and the profile. (report, exit code): 1 only when the file has problems."""
+    path = config_dir / "apply.json"
+    if not path.is_file():
+        return ("No fact sheet yet. Copy config/apply.example.json to config/apply.json and fill in your own facts.\n"
+                "Every field is optional: whatever you leave out is shown as 'needs you' on a form, never guessed.", 0)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return (f"config/apply.json could not be read: {type(e).__name__}: {e}", 1)
+    resume = _load_optional_json(config_dir / "resume.json")
+    profile = _load_optional_json(config_dir / "profile.json")
+    res = apply_sheet.check(raw, resume if isinstance(resume, dict) else None, profile if isinstance(profile, dict) else None, today)
+    lines: list[str] = []
+    if res["problems"]:
+        lines.append("Problems (fix these first; the fields they name are ignored until then):")
+        lines += [f"  ✗ {p}" for p in res["problems"]]
+    else:
+        lines.append("✓ config/apply.json is valid.")
+    if res["missing"]:
+        lines += ["", "Not filled in (a form question that depends on one of these will say 'needs you'):"]
+        lines += [f"  - {path_}: {effect}" for path_, effect in res["missing"]]
+    else:
+        lines += ["", "Everything is filled in."]
+    eeo = res["sheet"].get("equal_opportunity") or {}
+    defaulted = [k for k in apply_sheet.EEO_KINDS if eeo.get(k) == apply_sheet.EEO_DEFAULT]
+    if defaulted:
+        lines += ["", f"Equal opportunity: '{apply_sheet.EEO_DEFAULT}' for {', '.join(defaulted)} (never inferred; change it in the file if you want another answer)."]
+    if res["warnings"]:
+        lines += ["", "Check these (the sheet disagrees with your resume or profile):"]
+        lines += [f"  ⚠ {w}" for w in res["warnings"]]
+    elif resume is not None or profile is not None:
+        lines += ["", "No disagreement with your resume or profile."]
+    if res["skills"]:
+        lines += ["", "Years per skill: your own figure when you wrote one, else the length of the jobs your resume shows using the skill.",
+                  "A skill mentioned once in a long job gets that whole job's length, so lower it under experience.skill_years if it was a small part:"]
+        for r in res["skills"]:
+            seen_in = f"  [jobs and projects that mention it: {', '.join(r['roles'])}]" if r.get("roles") else ""
+            if r["years"] is not None:
+                lines.append(f"  {r['skill']}: {r['years']:g} years ({r['source']})"
+                             + (f"; the resume's dates alone give {r['derived']:g}" if r["source"] == "your override" and r["derived"] is not None else "") + seen_in)
+            else:
+                lines.append(f"  {r['skill']}: needs you ({r['note']})" + seen_in)
+    return "\n".join(lines), (1 if res["problems"] else 0)
+
+
 # ---------------------------------------------------------------- validate
 
 def validate_config(config_dir: Path) -> tuple[list[str], bool]:
@@ -1601,6 +1664,19 @@ def validate_config(config_dir: Path) -> tuple[list[str], bool]:
         except (json.JSONDecodeError, OSError, KeyError, TypeError) as e:
             ok = False
             lines.append(f" ✗ proof_points.json: could not be read ({type(e).__name__}: {e})")
+    af = config_dir / "apply.json"
+    if af.is_file():                                       # optional: your facts for application forms (apply assist)
+        try:
+            res = apply_sheet.check(json.loads(af.read_text(encoding="utf-8")))
+            if res["problems"]:
+                ok = False
+                lines.append(" ✗ apply.json:")
+                lines += [f"      - {p}" for p in res["problems"]]
+            else:
+                lines.append(f" ✓ apply.json: valid ({len(res['missing'])} thing(s) not filled in: see `scripts/jobsearch apply sheet`)")
+        except (json.JSONDecodeError, OSError, ValueError) as e:
+            ok = False
+            lines.append(f" ✗ apply.json: could not be read ({type(e).__name__}: {e})")
     for fname, fn in (("profile.json", scoring.validate_profile), ("resume.json", profile_tools.validate_resume),
                       ("search.json", profile_tools.validate_search)):
         path = config_dir / fname
@@ -1698,6 +1774,10 @@ def build_parser() -> argparse.ArgumentParser:
     gm.add_argument("value", nargs="?", help="for lookback: a number of days (1 to 365), or from-now")
     gm.add_argument("--no-browser", action="store_true", help="login: only print the link, do not try to open a browser")
     gm.add_argument("--restart", action="store_true", help="login: restart the scraper afterwards so it sees the saved login")
+
+    ap = sub.add_parser("apply", help="the apply assist: `apply sheet` checks config/apply.json, your facts for application forms")
+    ap.add_argument("action", choices=["sheet"])
+    ap.add_argument("--config-dir", default=str(REPO / "config"))
 
     sub.add_parser("parked", help="jobs that ran out of attempts (skipped until requeued)")
     rq = sub.add_parser("requeue", help="put parked jobs back in the queue")
@@ -1936,6 +2016,10 @@ def main(argv=None, stack=None, stdin=None) -> int:
         if args.cmd == "push-config":
             print(run_push_config(stack, dry_run=args.dry_run))
             return 0
+        if args.cmd == "apply":
+            report, code = run_apply_sheet(Path(args.config_dir))
+            print(report)
+            return code
         if args.cmd == "validate":
             lines, ok = validate_config(Path(args.config_dir))
             print("\n".join(lines))

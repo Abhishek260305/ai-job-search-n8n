@@ -1,0 +1,48 @@
+{
+  "_comment": "Example only. Copy to config/apply.json (gitignored) and fill in YOUR OWN facts. This is the one place the apply assist may take a personal answer from (besides your resume). Every field is optional: a field you leave out means 'needs you' for any form question that depends on it, never a default or a guess. Equal opportunity (gender, ethnicity, veteran, disability) is 'Prefer not to say' unless you write something else here; it is never inferred. Years per skill are worked out from your resume's dates; put a number in experience.skill_years only to override that. Nothing here is ever stored in the database, put in a log or sent to Claude except the few facts one drafted answer needs. Check the file with: scripts/jobsearch validate, and see what is missing with: scripts/jobsearch apply sheet",
+  "contact": {
+    "full_name": "Jane Doe",
+    "preferred_name": "Jane",
+    "email": "jane@example.com",
+    "phone": "+91 98765 43210",
+    "city": "Pune",
+    "country": "India",
+    "links": {
+      "linkedin": "https://www.linkedin.com/in/janedoe",
+      "github": "https://github.com/janedoe",
+      "portfolio": "https://janedoe.example.com"
+    }
+  },
+  "right_to_work": [
+    { "country": "India", "authorized": true, "needs_sponsorship_now": false, "needs_sponsorship_future": false }
+  ],
+  "relocation": { "willing": false, "where": [] },
+  "terms": {
+    "notice_period_days": 30,
+    "earliest_start_date": "immediately",
+    "current_pay": { "amount": 1800000, "currency": "INR", "period": "year" },
+    "expected_pay": { "min": 2200000, "max": 2600000, "currency": "INR", "period": "year", "negotiable": true },
+    "work_mode": ["remote", "hybrid"]
+  },
+  "experience": {
+    "total_years": 5,
+    "skill_years": { "Kubernetes": 2.5 },
+    "highest_education": "B.Tech, Computer Science",
+    "graduation_year": 2021,
+    "certifications": []
+  },
+  "standing_answers": {
+    "how_did_you_hear": "A job board",
+    "willing_to_travel": true,
+    "relative_here_default": false,
+    "custom": [
+      { "phrase": "Are you comfortable working in a fast-paced startup", "answer": "Yes" }
+    ]
+  },
+  "equal_opportunity": {
+    "gender": "Prefer not to say",
+    "ethnicity": "Prefer not to say",
+    "veteran": "Prefer not to say",
+    "disability": "Prefer not to say"
+  }
+}

@@ -2941,3 +2941,113 @@ def test_push_config_copies_proof_points_when_valid_and_refuses_a_broken_one():
     with pytest.raises(C.CheckError, match="proof_points.json does not pass the checks"):
         C.run_push_config(stack, repo=repo)
     assert stack.put == []
+
+
+# ------------------------------------------------------------------ apply assist, step 10a: the fact sheet (config/apply.json)
+
+def _cfg(tmp_path, apply=None, resume=True, profile=True):
+    for name, on in (("resume", resume), ("profile", profile)):
+        if on:
+            shutil.copy(REPO / "config" / f"{name}.example.json", tmp_path / f"{name}.json")
+    if apply is not None:
+        (tmp_path / "apply.json").write_text(apply if isinstance(apply, str) else json.dumps(apply), encoding="utf-8")
+    return tmp_path
+
+
+APPLY_EXAMPLE = json.loads((REPO / "config" / "apply.example.json").read_text(encoding="utf-8"))
+
+
+def test_apply_sheet_without_a_file_says_how_to_make_one_and_is_not_an_error(tmp_path):
+    out, code = C.run_apply_sheet(tmp_path)
+    assert code == 0 and "No fact sheet yet" in out and "config/apply.example.json" in out and "needs you" in out
+
+
+def test_apply_sheet_of_the_example_is_valid_and_lists_years_per_skill_and_disagreements(tmp_path):
+    out, code = C.run_apply_sheet(_cfg(tmp_path, APPLY_EXAMPLE), today=__import__("datetime").date(2026, 10, 14))
+    assert code == 0 and "✓ config/apply.json is valid." in out and "Everything is filled in." in out
+    assert "Equal opportunity: 'Prefer not to say' for gender, ethnicity, veteran, disability" in out
+    assert "contact.phone is not the phone number on your resume" in out                      # the example phone and the example resume differ
+    assert "Kubernetes: 2.5 years (your override); the resume's dates alone give 4.8  [jobs and projects that mention it: Example Corp]" in out
+    assert "lower it under experience.skill_years if it was a small part" in out
+    assert "Python: needs you (your resume only lists it in the skills section, with no role showing it)" in out
+
+
+def test_apply_sheet_lists_what_is_missing_with_the_effect(tmp_path):
+    out, code = C.run_apply_sheet(_cfg(tmp_path, {"contact": {"full_name": "Jane Doe"}}))
+    assert code == 0 and "Not filled in" in out
+    assert "terms.expected_pay: every 'expected salary' question" in out and "contact.full_name" not in out
+
+
+def test_apply_sheet_with_problems_exits_1_and_names_them(tmp_path):
+    out, code = C.run_apply_sheet(_cfg(tmp_path, {"contact": {"email": "nope"}, "terms": {"notice": 3}}))
+    assert code == 1 and "Problems" in out and "✗ contact.email: not a valid email address" in out and "terms.notice: not a field" in out
+    out, code = C.run_apply_sheet(_cfg(tmp_path, "{not json"))
+    assert code == 1 and "could not be read" in out
+
+
+def test_apply_sheet_works_without_a_resume_or_a_profile(tmp_path):
+    out, code = C.run_apply_sheet(_cfg(tmp_path, APPLY_EXAMPLE, resume=False, profile=False))
+    assert code == 0 and "✓ config/apply.json is valid." in out and "Years per skill" not in out and "disagreement" not in out
+    out, code = C.run_apply_sheet(_cfg(tmp_path, APPLY_EXAMPLE, resume=False, profile=True))
+    assert code == 0 and "Years per skill" not in out
+
+
+def test_apply_sheet_survives_a_broken_resume_file(tmp_path):
+    _cfg(tmp_path, APPLY_EXAMPLE)
+    (tmp_path / "resume.json").write_text("{broken")
+    out, code = C.run_apply_sheet(tmp_path)
+    assert code == 0 and "✓ config/apply.json is valid." in out
+
+
+def test_apply_is_a_real_subcommand_and_in_the_help(capsys):
+    assert "apply sheet" in C.__doc__
+    ns = C.build_parser().parse_args(["apply", "sheet"])
+    assert ns.cmd == "apply" and ns.action == "sheet"
+    with pytest.raises(SystemExit):
+        C.build_parser().parse_args(["apply", "submit"])
+    with pytest.raises(SystemExit):
+        C.build_parser().parse_args(["apply"])
+
+
+def test_apply_sheet_through_main_prints_and_returns_the_exit_code(tmp_path, capsys):
+    _cfg(tmp_path, {"contact": {"email": "nope"}})
+    assert C.main(["apply", "sheet", "--config-dir", str(tmp_path)], stack=FakeStack()) == 1
+    assert "✗ contact.email" in capsys.readouterr().out
+    _cfg(tmp_path, APPLY_EXAMPLE)
+    assert C.main(["apply", "sheet", "--config-dir", str(tmp_path)], stack=FakeStack()) == 0
+
+
+def test_validate_checks_apply_json_when_the_file_exists_and_stays_quiet_when_it_does_not(tmp_path):
+    lines, ok = C.validate_config(_cfg(tmp_path))
+    assert not any("apply.json" in l for l in lines)
+    _cfg(tmp_path, {"contact": {"full_name": "Jane Doe"}})
+    lines, ok = C.validate_config(tmp_path)
+    assert any(l.startswith(" ✓ apply.json: valid (") and "scripts/jobsearch apply sheet" in l for l in lines)
+    _cfg(tmp_path, {"contact": {"email": "nope"}})
+    lines, ok = C.validate_config(tmp_path)
+    assert not ok and " ✗ apply.json:" in lines and any("contact.email" in l for l in lines)
+    _cfg(tmp_path, "{nope")
+    lines, ok = C.validate_config(tmp_path)
+    assert not ok and any("apply.json: could not be read" in l for l in lines)
+
+
+def test_push_config_copies_apply_json_when_valid_refuses_a_broken_one_and_skips_it_quietly_when_absent():
+    import tempfile
+    repo = Path(tempfile.mkdtemp())
+    (repo / "config").mkdir()
+    shutil.copy(REPO / "config" / "profile.example.json", repo / "config" / "profile.json")
+    shutil.copy(REPO / "config" / "resume.example.json", repo / "config" / "resume.json")
+    stack = FakeStack()
+    stack.ssh, stack.remote_dir, stack.put = ["ssh", "u@h"], "/home/u/jobsearch", []
+    stack.put_config_file = lambda name, text: stack.put.append(name)
+    out = C.run_push_config(stack, repo=repo)
+    assert "apply.json" not in out and set(stack.put) == {"profile.json", "resume.json"}
+    (repo / "config" / "apply.json").write_text(json.dumps(APPLY_EXAMPLE))
+    stack.put.clear()
+    out = C.run_push_config(stack, repo=repo)
+    assert "copied apply.json" in out and set(stack.put) == {"profile.json", "resume.json", "apply.json"}
+    (repo / "config" / "apply.json").write_text(json.dumps({"contact": {"email": "nope"}}))
+    stack.put.clear()
+    with pytest.raises(C.CheckError, match="apply.json does not pass the checks"):
+        C.run_push_config(stack, repo=repo)
+    assert stack.put == []
